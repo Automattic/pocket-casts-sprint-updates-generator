@@ -5,7 +5,7 @@ const PROJECT_SUMMARY_PROMPT = `You are a technical writer producing a biweekly 
 
 Given the following data about work completed in the "{projectName}" project during the sprint ({startDate} to {endDate}), produce:
 
-1. A summary paragraph (2-4 sentences) describing what was accomplished this sprint. Mention specific features, bug fixes, or improvements. Use the ticket descriptions, PR descriptions, and the latest project update (if available) to understand context and write a meaningful update.
+1. A summary paragraph (1-2 sentences) describing what was accomplished this sprint. Mention specific features, bug fixes, or improvements. Use the ticket descriptions, PR descriptions, and the latest project update (if available) to understand context and write a meaningful update.
 2. A status tag: exactly one of "Complete", "Nearly complete", "In Progress", "Started", "Blocked"
 
 The data includes:
