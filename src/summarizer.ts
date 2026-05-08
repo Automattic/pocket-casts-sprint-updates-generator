@@ -33,7 +33,7 @@ Respond ONLY with this exact JSON (no markdown, no code fences):
 
 const TOP_ITEMS_PROMPT = `You are a technical writer selecting headline items for a biweekly sprint report.
 
-Given these project summaries and uncategorized PRs from a sprint ({startDate} to {endDate}), select the top 3-5 most impactful items shipped.
+Given these project summaries and uncategorized PRs from a sprint ({startDate} to {endDate}), select the top 3 most impactful items shipped.
 
 Criteria for "top items":
 - User-facing features or significant improvements
