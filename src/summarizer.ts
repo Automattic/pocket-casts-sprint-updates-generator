@@ -1,5 +1,5 @@
 import type { AIProvider } from "./ai/provider.js";
-import type { ProjectGroup, ProjectSummary, TopItem, ReportItem } from "./types.js";
+import type { ProjectGroup, ProjectSummary, TopItem, ReportItem, PromptConfig } from "./types.js";
 
 const PROJECT_SUMMARY_PROMPT = `You are a technical writer producing a biweekly sprint report for a podcast app team.
 
@@ -71,6 +71,7 @@ export async function summarizeProject(
   startDate: string,
   endDate: string,
   provider: AIProvider,
+  promptConfig?: PromptConfig,
 ): Promise<ProjectSummary> {
   const projectData = JSON.stringify(
     {
@@ -98,11 +99,15 @@ export async function summarizeProject(
     2,
   );
 
-  const prompt = PROJECT_SUMMARY_PROMPT
+  const basePrompt = (promptConfig?.projectSummary ?? PROJECT_SUMMARY_PROMPT)
     .replace("{projectName}", group.projectName)
     .replace("{startDate}", startDate)
     .replace("{endDate}", endDate)
     .replace("{projectData}", projectData);
+
+  const prompt = promptConfig?.additionalInstructions
+    ? basePrompt + "\n\nAdditional instructions: " + promptConfig.additionalInstructions
+    : basePrompt;
 
   const text = await provider.chat([{ role: "user", content: prompt }]);
 
@@ -159,32 +164,34 @@ export async function selectTopItems(
   startDate: string,
   endDate: string,
   provider: AIProvider,
+  promptConfig?: PromptConfig,
 ): Promise<TopItem[]> {
-  const prompt = TOP_ITEMS_PROMPT
+  const summariesJson = JSON.stringify(
+    projectSummaries.map((p) => ({
+      project: p.projectName,
+      platform: p.platform,
+      summary: p.summary,
+      status: p.status,
+      items: p.items.map((i) => i.title),
+    })),
+    null,
+    2,
+  );
+  const uncategorizedJson = JSON.stringify(
+    uncategorizedPRs.map((p) => ({ title: p.title, url: p.url })),
+    null,
+    2,
+  );
+
+  const basePrompt = (promptConfig?.topItems ?? TOP_ITEMS_PROMPT)
     .replace("{startDate}", startDate)
     .replace("{endDate}", endDate)
-    .replace(
-      "{projectSummaries}",
-      JSON.stringify(
-        projectSummaries.map((p) => ({
-          project: p.projectName,
-          platform: p.platform,
-          summary: p.summary,
-          status: p.status,
-          items: p.items.map((i) => i.title),
-        })),
-        null,
-        2,
-      ),
-    )
-    .replace(
-      "{uncategorizedPRs}",
-      JSON.stringify(
-        uncategorizedPRs.map((p) => ({ title: p.title, url: p.url })),
-        null,
-        2,
-      ),
-    );
+    .replace("{projectSummaries}", summariesJson)
+    .replace("{uncategorizedPRs}", uncategorizedJson);
+
+  const prompt = promptConfig?.additionalInstructions
+    ? basePrompt + "\n\nAdditional instructions: " + promptConfig.additionalInstructions
+    : basePrompt;
 
   const text = await provider.chat([{ role: "user", content: prompt }]);
 

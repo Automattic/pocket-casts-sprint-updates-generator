@@ -9,7 +9,7 @@ import {
   ENV_PATH,
 } from "../config.js";
 import { PROVIDER_DEFAULTS } from "../ai/provider.js";
-import type { SprintConfig, RepoConfig, MemberConfig, AIConfig } from "../types.js";
+import type { SprintConfig, RepoConfig, MemberConfig, AIConfig, PromptConfig } from "../types.js";
 import type { ProviderName } from "../ai/provider.js";
 
 export async function setupAction(): Promise<void> {
@@ -241,6 +241,24 @@ export async function setupAction(): Promise<void> {
     console.log(`  ✓ Sprints: ${durationWeeks}-week cycles starting from ${anchorDate}`);
     console.log("");
 
+    // Step 10: AI Prompt Customization (optional)
+    console.log("Step 10: AI Prompt Customization (optional)");
+    console.log("  You can add extra instructions that will be appended to all AI prompts.");
+    console.log("  Example: 'Focus on user-facing changes. Keep summaries concise.'");
+    console.log("  Full prompt overrides can be set directly in config.json.");
+    const additionalInstructions = (
+      await rl.question("  Additional AI instructions (optional): ")
+    ).trim();
+
+    let promptsConfig: PromptConfig | undefined;
+    if (additionalInstructions) {
+      promptsConfig = { additionalInstructions };
+      console.log("  ✓ Custom instructions saved.");
+    } else {
+      console.log("  Using default prompts.");
+    }
+    console.log("");
+
     // Save everything
     const config: SprintConfig = {
       githubOrg,
@@ -251,6 +269,7 @@ export async function setupAction(): Promise<void> {
       ai: aiConfig,
       sprint: { anchorDate, durationWeeks },
       repoPlatformMap: {},
+      ...(promptsConfig ? { prompts: promptsConfig } : {}),
     };
 
     ensureConfigDir();

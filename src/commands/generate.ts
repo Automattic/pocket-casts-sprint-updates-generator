@@ -106,7 +106,7 @@ export async function generateAction(options: GenerateOptions): Promise<void> {
     const projectSummaries: ProjectSummary[] = [];
     for (const group of projectGroups) {
       console.error(`  Summarizing: ${group.projectName}...`);
-      const summary = await summarizeProject(group, startDate, endDate, provider);
+      const summary = await summarizeProject(group, startDate, endDate, provider, config.prompts);
       projectSummaries.push(summary);
     }
 
@@ -121,6 +121,7 @@ export async function generateAction(options: GenerateOptions): Promise<void> {
       startDate,
       endDate,
       provider,
+      config.prompts,
     );
 
     const otherByPlatform: Record<string, ReportItem[]> = {};

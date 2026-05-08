@@ -88,6 +88,12 @@ export interface SprintCadence {
   durationWeeks: number; // Sprint length in weeks (default: 2)
 }
 
+export interface PromptConfig {
+  projectSummary?: string;        // Full override for the project summary prompt
+  topItems?: string;              // Full override for the top items prompt
+  additionalInstructions?: string; // Appended to all AI prompts
+}
+
 export interface SprintConfig {
   githubOrg: string;
   repos: RepoConfig[];
@@ -97,6 +103,7 @@ export interface SprintConfig {
   ai: AIConfig;
   sprint: SprintCadence;
   repoPlatformMap: Record<string, string>;
+  prompts?: PromptConfig;
 }
 
 export interface ResolvedAuthors {
