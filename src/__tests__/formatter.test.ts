@@ -59,7 +59,7 @@ describe("formatHtml", () => {
 
     expect(html).toContain("<h2>Project Updates</h2>");
     expect(html).toContain(
-      'Android: <a href="https://linear.app/a8c/project/playback-robustness-abc123">Playback robustness</a> - <em>In Progress</em>',
+      '<a href="https://linear.app/a8c/project/playback-robustness-abc123">Playback robustness</a> - <em>In Progress</em>',
     );
     expect(html).toContain(
       "Wired Media3 session into automotive and wear platforms.",
@@ -120,7 +120,7 @@ describe("formatMarkdown", () => {
     const md = formatMarkdown(makeReport());
 
     expect(md).toContain(
-      "### Android: [Playback robustness](https://linear.app/a8c/project/playback-robustness-abc123) - *In Progress*",
+      "### [Playback robustness](https://linear.app/a8c/project/playback-robustness-abc123) - *In Progress*",
     );
   });
 

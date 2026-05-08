@@ -72,7 +72,7 @@ function formatProjectHtml(project: ProjectSummary): string {
     ? `<a href="${escapeHtml(project.projectUrl)}">${escapeHtml(project.projectName)}</a>`
     : escapeHtml(project.projectName);
   lines.push(
-    `<h3>${escapeHtml(project.platform)}: ${projectLabel} - <em>${escapeHtml(project.status)}</em></h3>`,
+    `<h3>${projectLabel} - <em>${escapeHtml(project.status)}</em></h3>`,
   );
   lines.push(`<p>${escapeHtml(project.summary)}</p>`);
 
@@ -134,7 +134,7 @@ function formatProjectMarkdown(project: ProjectSummary): string {
   const projectLabel = project.projectUrl
     ? `[${project.projectName}](${project.projectUrl})`
     : project.projectName;
-  lines.push(`### ${project.platform}: ${projectLabel} - *${project.status}*`);
+  lines.push(`### ${projectLabel} - *${project.status}*`);
   lines.push(project.summary);
   for (const item of project.items) {
     lines.push(formatItemMarkdown(item));
@@ -157,7 +157,7 @@ export function formatRawGrouped(
     lines.push("-".repeat(30));
     for (const project of report.projectUpdates) {
       lines.push(
-        `\n[${project.platform}] ${project.projectName} (${project.status})`,
+        `\n${project.projectName} (${project.status})`,
       );
       for (const item of project.items) {
         const id = item.linearId ? ` ${item.linearId}` : "";
