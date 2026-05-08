@@ -6,7 +6,7 @@ const PROJECT_SUMMARY_PROMPT = `You are a technical writer producing a biweekly 
 Given the following data about work completed in the "{projectName}" project during the sprint ({startDate} to {endDate}), produce:
 
 1. A summary paragraph (1-2 sentences) describing what was accomplished this sprint. Mention specific features, bug fixes, or improvements. Use the ticket descriptions, PR descriptions, and the latest project update (if available) to understand context and write a meaningful update.
-2. A status tag: exactly one of "Complete", "Nearly complete", "In Progress", "Started", "Blocked"
+2. A status tag: exactly one of "Completed", "In Progress", "Paused"
 
 The data includes:
 - projectDescription: the overall goal of the project
@@ -23,7 +23,7 @@ RULES:
 - Do not invent information not present in the data
 - The summary should read like a natural status update a team lead would write
 - If a latestProjectUpdate is provided, use it for context about where the project stands overall -- but focus the summary on THIS sprint's work
-- Base the status on project progress percentage and health: 100% = Complete, 80-99% = Nearly complete, 20-79% = In Progress, 1-19% = Started, 0% with blockers = Blocked. Health "offTrack" or "atRisk" can override to "Blocked" if appropriate.
+- Base the status on project progress percentage and health: 100% = Completed, 1-99% = In Progress, 0% or health "offTrack"/"atRisk" = Paused.
 
 Project data:
 {projectData}
@@ -113,7 +113,7 @@ export async function summarizeProject(
     console.error(`[summarizer] Failed to parse project summary for "${group.projectName}": ${text}`);
     parsed = {
       summary: `Work on ${group.projectName} (${group.issues.length} issues, ${group.prs.length} PRs)`,
-      status: group.projectProgress && group.projectProgress >= 1 ? "Complete" : "In Progress",
+      status: group.projectProgress && group.projectProgress >= 1 ? "Completed" : "In Progress",
     };
   }
 

@@ -45,7 +45,7 @@ export interface ProjectSummary {
   projectUrl: string | null;
   platform: string;
   summary: string;
-  status: "Complete" | "Nearly complete" | "In Progress" | "Started" | "Blocked";
+  status: "Completed" | "In Progress" | "Paused";
   items: ReportItem[];
 }
 
