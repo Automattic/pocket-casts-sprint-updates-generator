@@ -226,4 +226,61 @@ describe("correlate", () => {
 
     expect(result.projectGroups[0].platform).toBe("Android");
   });
+
+  it("never drops a PR: every input PR appears in exactly one output bucket", () => {
+    // A mixed input that exercises all matching branches at once.
+    const matchedByUrl = makePR({
+      number: 1,
+      url: "https://github.com/Automattic/pocket-casts-android/pull/1",
+    });
+    const matchedByBody = makePR({
+      number: 2,
+      url: "https://github.com/Automattic/pocket-casts-android/pull/2",
+      body: "Fixes PCDROID-200",
+    });
+    const matchedToNoProjectIssue = makePR({
+      number: 3,
+      url: "https://github.com/Automattic/pocket-casts-android/pull/3",
+      body: "Fixes PCDROID-300",
+    });
+    const noLinearRef = makePR({
+      number: 4,
+      url: "https://github.com/Automattic/pocket-casts-android/pull/4",
+      body: "Plain refactor, no ticket",
+    });
+
+    const issues = [
+      makeIssue({
+        identifier: "PCDROID-100",
+        projectName: "Project A",
+        prUrls: [matchedByUrl.url],
+      }),
+      makeIssue({ identifier: "PCDROID-200", projectName: "Project B" }),
+      makeIssue({
+        identifier: "PCDROID-300",
+        projectName: null,
+        projectId: null,
+      }),
+    ];
+    const prs = [matchedByUrl, matchedByBody, matchedToNoProjectIssue, noLinearRef];
+
+    const result = correlate(issues, prs, [], defaultConfig);
+
+    const renderedUrls = [
+      ...result.projectGroups.flatMap((g) => g.prs.map((p) => p.url)),
+      ...result.unmatchedPRs.map((p) => p.url),
+    ];
+
+    // No duplication: each PR rendered exactly once across all buckets.
+    expect(renderedUrls).toHaveLength(prs.length);
+    expect(new Set(renderedUrls).size).toBe(prs.length);
+
+    // No loss: the set of rendered URLs equals the set of input URLs.
+    expect(new Set(renderedUrls)).toEqual(new Set(prs.map((p) => p.url)));
+
+    // PRs without an in-scope linkable project end up surfaced under "Other".
+    const unmatchedUrls = new Set(result.unmatchedPRs.map((p) => p.url));
+    expect(unmatchedUrls).toContain(matchedToNoProjectIssue.url);
+    expect(unmatchedUrls).toContain(noLinearRef.url);
+  });
 });

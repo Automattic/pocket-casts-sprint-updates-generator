@@ -94,6 +94,22 @@ export async function generateAction(options: GenerateOptions): Promise<void> {
   const { projectGroups, unmatchedPRs } = correlate(issues, prs, projectMetas, config);
   console.error(`  Project groups: ${projectGroups.length}`);
   console.error(`  Unmatched PRs: ${unmatchedPRs.length}`);
+
+  // Safety guard: every fetched PR must surface somewhere in the report,
+  // either under a project group or in the "Other" (unmatched) bucket.
+  const renderedPRUrls = new Set<string>([
+    ...projectGroups.flatMap((g) => g.prs.map((pr) => pr.url)),
+    ...unmatchedPRs.map((pr) => pr.url),
+  ]);
+  const droppedPRs = prs.filter((pr) => !renderedPRUrls.has(pr.url));
+  if (droppedPRs.length > 0) {
+    console.error(
+      `  WARNING: ${droppedPRs.length} fetched PR(s) are missing from the report:`,
+    );
+    for (const pr of droppedPRs) {
+      console.error(`    #${pr.number} ${pr.title} (${pr.url})`);
+    }
+  }
   console.error("");
 
   // Build report
