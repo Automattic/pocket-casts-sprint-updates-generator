@@ -1,4 +1,4 @@
-import type { SprintReport, ProjectSummary, ReportItem } from "./types.js";
+import type { SprintReport, ReportInitiative, ReportProject } from "./types.js";
 
 function escapeHtml(text: string): string {
   return text
@@ -8,119 +8,101 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function formatItemHtml(item: ReportItem): string {
-  const suffix = item.linearId ? ` (${escapeHtml(item.linearId)})` : "";
-  if (item.url) {
-    return `<li><a href="${escapeHtml(item.url)}">${escapeHtml(item.title)}</a>${suffix}</li>`;
-  }
-  return `<li>${escapeHtml(item.title)}${suffix}</li>`;
-}
-
-function formatItemMarkdown(item: ReportItem): string {
-  const suffix = item.linearId ? ` (${item.linearId})` : "";
-  if (item.url) {
-    return `- [${item.title}](${item.url})${suffix}`;
-  }
-  return `- ${item.title}${suffix}`;
+function link(label: string, url: string | null, html: boolean): string {
+  if (!url) return html ? escapeHtml(label) : label;
+  return html
+    ? `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`
+    : `[${label}](${url})`;
 }
 
 export function formatHtml(report: SprintReport): string {
   const lines: string[] = [];
 
-  // Top Items
   if (report.topItems.length > 0) {
     lines.push("<h2>Top Items Shipped</h2>");
     lines.push("<ul>");
     for (const item of report.topItems) {
       lines.push(`<li>${escapeHtml(item.headline)}</li>`);
     }
-    lines.push("</ul>");
-    lines.push("");
+    lines.push("</ul>", "");
   }
 
-  // Project Updates
-  if (report.projectUpdates.length > 0) {
-    lines.push("<h2>Project Updates</h2>");
-    for (const project of report.projectUpdates) {
-      lines.push(formatProjectHtml(project));
-    }
+  for (const initiative of report.initiatives) {
+    lines.push(formatInitiativeHtml(initiative));
   }
 
-  // Other
   const platforms = Object.keys(report.otherByPlatform).sort();
   if (platforms.length > 0) {
     lines.push("<h2>Other</h2>");
     for (const platform of platforms) {
       const items = report.otherByPlatform[platform];
       if (items.length === 0) continue;
-      lines.push(`<h3>${escapeHtml(platform)}</h3>`);
-      lines.push("<ul>");
+      lines.push(`<h3>${escapeHtml(platform)}</h3>`, "<ul>");
       for (const item of items) {
-        lines.push(formatItemHtml(item));
+        lines.push(`<li>${link(item.title, item.url, true)}</li>`);
       }
-      lines.push("</ul>");
-      lines.push("");
+      lines.push("</ul>", "");
     }
   }
 
   return lines.join("\n");
 }
 
-function formatProjectHtml(project: ProjectSummary): string {
+function formatInitiativeHtml(initiative: ReportInitiative): string {
   const lines: string[] = [];
-  const projectLabel = project.projectUrl
-    ? `<a href="${escapeHtml(project.projectUrl)}">${escapeHtml(project.projectName)}</a>`
-    : escapeHtml(project.projectName);
-  lines.push(
-    `<h3>${projectLabel} - <em>${escapeHtml(project.status)}</em></h3>`,
-  );
-  lines.push(`<p>${escapeHtml(project.summary)}</p>`);
 
-  if (project.items.length > 0) {
-    lines.push("<ul>");
-    for (const item of project.items) {
-      lines.push(formatItemHtml(item));
+  if (initiative.initiativeName) {
+    lines.push(`<h2>${link(initiative.initiativeName, initiative.initiativeUrl, true)}</h2>`);
+    for (const project of initiative.projects) {
+      lines.push(`<p><strong>${link(project.platform, project.projectUrl, true)}</strong>: <em>${escapeHtml(project.status)}</em></p>`);
+      lines.push(`<p>${escapeHtml(project.summary)}</p>`);
+      lines.push(prListHtml(project));
     }
-    lines.push("</ul>");
+  } else {
+    const project = initiative.projects[0];
+    lines.push(`<h2>${link(project.projectName, project.projectUrl, true)} - <em>${escapeHtml(project.status)}</em></h2>`);
+    lines.push(`<p>${escapeHtml(project.summary)}</p>`);
+    lines.push(prListHtml(project));
   }
-  lines.push("");
 
+  lines.push("");
+  return lines.join("\n");
+}
+
+function prListHtml(project: ReportProject): string {
+  if (project.prs.length === 0) return "";
+  const lines = ["<ul>"];
+  for (const pr of project.prs) {
+    lines.push(`<li>${link(pr.title, pr.url, true)}</li>`);
+  }
+  lines.push("</ul>");
   return lines.join("\n");
 }
 
 export function formatMarkdown(report: SprintReport): string {
   const lines: string[] = [];
 
-  // Top Items
   if (report.topItems.length > 0) {
-    lines.push("## Top Items Shipped");
-    lines.push("");
+    lines.push("## Top Items Shipped", "");
     for (const item of report.topItems) {
       lines.push(`- ${item.headline}`);
     }
     lines.push("");
   }
 
-  // Project Updates
-  if (report.projectUpdates.length > 0) {
-    lines.push("## Project Updates");
-    lines.push("");
-    for (const project of report.projectUpdates) {
-      lines.push(formatProjectMarkdown(project));
-    }
+  for (const initiative of report.initiatives) {
+    lines.push(formatInitiativeMarkdown(initiative));
   }
 
-  // Other
   const platforms = Object.keys(report.otherByPlatform).sort();
   if (platforms.length > 0) {
-    lines.push("## Other");
-    lines.push("");
+    lines.push("## Other", "");
     for (const platform of platforms) {
       const items = report.otherByPlatform[platform];
       if (items.length === 0) continue;
       lines.push(`### ${platform}`);
       for (const item of items) {
-        lines.push(formatItemMarkdown(item));
+        lines.push(`- ${link(item.title, item.url, false)}`);
       }
       lines.push("");
     }
@@ -129,56 +111,54 @@ export function formatMarkdown(report: SprintReport): string {
   return lines.join("\n");
 }
 
-function formatProjectMarkdown(project: ProjectSummary): string {
+function formatInitiativeMarkdown(initiative: ReportInitiative): string {
   const lines: string[] = [];
-  const projectLabel = project.projectUrl
-    ? `[${project.projectName}](${project.projectUrl})`
-    : project.projectName;
-  lines.push(`### ${projectLabel} - *${project.status}*`);
-  lines.push(project.summary);
-  for (const item of project.items) {
-    lines.push(formatItemMarkdown(item));
+
+  if (initiative.initiativeName) {
+    lines.push(`## ${link(initiative.initiativeName, initiative.initiativeUrl, false)}`, "");
+    for (const project of initiative.projects) {
+      lines.push(`**${link(project.platform, project.projectUrl, false)}**: *${project.status}*`);
+      lines.push(project.summary);
+      lines.push(...prListMarkdown(project), "");
+    }
+  } else {
+    const project = initiative.projects[0];
+    lines.push(`## ${link(project.projectName, project.projectUrl, false)} - *${project.status}*`, "");
+    lines.push(project.summary);
+    lines.push(...prListMarkdown(project), "");
   }
-  lines.push("");
+
   return lines.join("\n");
 }
 
-export function formatRawGrouped(
-  report: SprintReport,
-): string {
+function prListMarkdown(project: ReportProject): string[] {
+  return project.prs.map((pr) => `- ${link(pr.title, pr.url, false)}`);
+}
+
+export function formatRawGrouped(report: SprintReport): string {
   const lines: string[] = [];
+  lines.push(`Sprint Report: ${report.startDate} to ${report.endDate}`, "=".repeat(50), "");
 
-  lines.push(`Sprint Report: ${report.startDate} to ${report.endDate}`);
-  lines.push("=".repeat(50));
-  lines.push("");
-
-  if (report.projectUpdates.length > 0) {
-    lines.push("PROJECT UPDATES");
-    lines.push("-".repeat(30));
-    for (const project of report.projectUpdates) {
-      lines.push(
-        `\n${project.projectName} (${project.status})`,
-      );
-      for (const item of project.items) {
-        const id = item.linearId ? ` ${item.linearId}` : "";
-        const url = item.url ? ` ${item.url}` : "";
-        lines.push(`  - ${item.title}${id}${url}`);
+  for (const initiative of report.initiatives) {
+    const heading = initiative.initiativeName ?? initiative.projects[0]?.projectName ?? "";
+    lines.push(`\n${heading}`);
+    for (const project of initiative.projects) {
+      lines.push(`  ${project.platform} (${project.status})`);
+      for (const pr of project.prs) {
+        lines.push(`    - ${pr.title} ${pr.url}`);
       }
     }
-    lines.push("");
   }
 
   const platforms = Object.keys(report.otherByPlatform).sort();
   if (platforms.length > 0) {
-    lines.push("OTHER");
-    lines.push("-".repeat(30));
+    lines.push("", "OTHER", "-".repeat(30));
     for (const platform of platforms) {
       const items = report.otherByPlatform[platform];
       if (items.length === 0) continue;
       lines.push(`\n${platform}:`);
       for (const item of items) {
-        const url = item.url ? ` ${item.url}` : "";
-        lines.push(`  - ${item.title}${url}`);
+        lines.push(`  - ${item.title} ${item.url}`);
       }
     }
   }
