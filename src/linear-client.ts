@@ -89,31 +89,48 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+const ISSUES_BY_REF_QUERY = `
+query IssuesByRef($filter: IssueFilter!) {
+  issues(filter: $filter, first: 250) {
+    nodes { identifier title team { key } project { id } }
+  }
+}`;
+
+function parseIdentifier(id: string): { teamKey: string; number: number } | null {
+  const dash = id.lastIndexOf("-");
+  if (dash === -1) return null;
+  const teamKey = id.slice(0, dash);
+  const number = Number(id.slice(dash + 1));
+  if (!teamKey || !Number.isInteger(number)) return null;
+  return { teamKey, number };
+}
+
 export async function fetchTicketsByIdentifier(
   identifiers: string[],
   verbose: boolean = false,
 ): Promise<LinearTicket[]> {
   const apiKey = getApiKey();
-  const unique = [...new Set(identifiers)];
+  const parsed = [...new Set(identifiers)]
+    .map((id) => parseIdentifier(id))
+    .filter((p): p is { teamKey: string; number: number } => p !== null);
   const tickets: LinearTicket[] = [];
 
-  for (const group of chunk(unique, IDENTIFIER_CHUNK)) {
-    const fields = group
-      .map(
-        (id, i) =>
-          `i${i}: issue(id: ${JSON.stringify(id)}) { identifier title team { key } project { id } }`,
-      )
-      .join("\n");
-    const query = `query IssuesByIdentifier {\n${fields}\n}`;
+  for (const group of chunk(parsed, IDENTIFIER_CHUNK)) {
+    const filter = {
+      or: group.map((p) => ({ team: { key: { eq: p.teamKey } }, number: { eq: p.number } })),
+    };
 
     if (verbose) {
       console.error(`[linear] Resolving ${group.length} ticket identifiers`);
     }
 
-    const data = await graphqlRequest<Record<string, RawIssueNode | null>>(apiKey, query);
+    const data = await graphqlRequest<{ issues: { nodes: RawIssueNode[] } }>(
+      apiKey,
+      ISSUES_BY_REF_QUERY,
+      { filter },
+    );
 
-    for (const node of Object.values(data)) {
-      if (!node) continue;
+    for (const node of data.issues.nodes) {
       tickets.push({
         identifier: node.identifier,
         title: node.title,
@@ -126,19 +143,24 @@ export async function fetchTicketsByIdentifier(
   return tickets;
 }
 
-const PROJECT_FIELDS = `
-    id
-    name
-    url
-    state
-    status { name type }
-    progress
-    description
-    targetDate
-    teams(first: 5) { nodes { key name } }
-    initiatives(first: 5) { nodes { id name url } }
-    projectUpdates(first: 1) { nodes { body health createdAt } }
-`;
+const PROJECTS_BY_ID_QUERY = `
+query ProjectsById($ids: [ID!]!) {
+  projects(filter: { id: { in: $ids } }, first: 250) {
+    nodes {
+      id
+      name
+      url
+      state
+      status { name type }
+      progress
+      description
+      targetDate
+      teams(first: 5) { nodes { key name } }
+      initiatives(first: 5) { nodes { id name url } }
+      projectUpdates(first: 1) { nodes { body health createdAt } }
+    }
+  }
+}`;
 
 export async function fetchProjectsById(
   projectIds: string[],
@@ -150,19 +172,17 @@ export async function fetchProjectsById(
   const projects = new Map<string, LinearProject>();
 
   for (const group of chunk(unique, PROJECT_CHUNK)) {
-    const fields = group
-      .map((id, i) => `p${i}: project(id: ${JSON.stringify(id)}) {${PROJECT_FIELDS}}`)
-      .join("\n");
-    const query = `query ProjectsById {\n${fields}\n}`;
-
     if (verbose) {
       console.error(`[linear] Fetching ${group.length} projects`);
     }
 
-    const data = await graphqlRequest<Record<string, RawProjectNode | null>>(apiKey, query);
+    const data = await graphqlRequest<{ projects: { nodes: RawProjectNode[] } }>(
+      apiKey,
+      PROJECTS_BY_ID_QUERY,
+      { ids: group },
+    );
 
-    for (const node of Object.values(data)) {
-      if (!node) continue;
+    for (const node of data.projects.nodes) {
       const teamKeys = node.teams.nodes.map((t) => t.key);
       const initiativeNode = node.initiatives.nodes[0];
       const updateNode = node.projectUpdates.nodes[0];
@@ -179,7 +199,7 @@ export async function fetchProjectsById(
         name: node.name,
         url: node.url,
         teamKeys,
-        platform: config.teamKeyPlatformMap[teamKeys[0]] ?? "Unknown",
+        platform: pickPlatform(teamKeys, config.teamKeyPlatformMap),
         status: mapStatus(node.status?.type ?? node.state),
         progress: node.progress ?? 0,
         description: node.description,
@@ -191,6 +211,13 @@ export async function fetchProjectsById(
   }
 
   return projects;
+}
+
+function pickPlatform(teamKeys: string[], map: Record<string, string>): string {
+  for (const key of teamKeys) {
+    if (map[key]) return map[key];
+  }
+  return "Unknown";
 }
 
 function mapStatus(raw: string | null | undefined): ReportStatus {

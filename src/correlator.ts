@@ -63,7 +63,39 @@ export async function resolve(
     }
   }
 
-  return { bundles: [...bundles.values()], orphanPRs };
+  const result = [...bundles.values()];
+  for (const bundle of result) {
+    bundle.project.platform = resolvePlatform(
+      bundle.project.teamKeys,
+      config.teamKeyPlatformMap,
+      bundle.prs,
+    );
+  }
+
+  return { bundles: result, orphanPRs };
+}
+
+function resolvePlatform(
+  teamKeys: string[],
+  map: Record<string, string>,
+  prs: GitHubPR[],
+): string {
+  const teamPlatforms = teamKeys.map((k) => map[k]).filter(Boolean);
+  const pr = dominantPlatform(prs);
+  if (pr !== "Unknown" && teamPlatforms.includes(pr)) return pr;
+  if (teamPlatforms.length) return teamPlatforms[0];
+  return pr;
+}
+
+function dominantPlatform(prs: GitHubPR[]): string {
+  const counts = new Map<string, number>();
+  for (const pr of prs) {
+    counts.set(pr.platform, (counts.get(pr.platform) ?? 0) + 1);
+  }
+  const platforms = [...counts.keys()];
+  if (platforms.length === 0) return "Unknown";
+  if (platforms.length > 1) return "Cross-platform";
+  return platforms[0];
 }
 
 function firstBundleForPR(
