@@ -1,35 +1,38 @@
 import type { AIProvider } from "./ai/provider.js";
-import type { ProjectGroup, ProjectSummary, TopItem, ReportItem, PromptConfig } from "./types.js";
+import type {
+  GitHubPR,
+  LinearProject,
+  ProjectBundle,
+  ReportProject,
+  ReportPR,
+  TopItem,
+  PromptConfig,
+} from "./types.js";
 
 const PROJECT_SUMMARY_PROMPT = `You are a technical writer producing a biweekly sprint report for a podcast app team.
 
-Given the following data about work completed in the "{projectName}" project during the sprint ({startDate} to {endDate}), produce:
-
-1. A summary paragraph (1-2 sentences) describing what was accomplished this sprint. Mention specific features, bug fixes, or improvements. Use the ticket descriptions, PR descriptions, and the latest project update (if available) to understand context and write a meaningful update.
-2. A status tag: exactly one of "Completed", "In Progress", "Paused"
+Given the following data about work done in the "{projectName}" project during the sprint ({startDate} to {endDate}), write a summary paragraph (1-2 sentences) describing what was accomplished this sprint. Mention specific features, bug fixes, or improvements.
 
 The data includes:
 - projectDescription: the overall goal of the project
-- latestProjectUpdate: the most recent status update written by the team (use this for tone and context)
+- latestProjectUpdate: the most recent status update written by the team -- incorporate its substance into the summary, reworded to focus on this sprint's work
 - health: the project's health status (onTrack, atRisk, offTrack)
 - targetDate: when the project is expected to ship
-- issues: completed Linear tickets this sprint
 - prs: merged pull requests this sprint
 
 RULES:
-- Be specific about what was accomplished -- reference concrete features, fixes, and changes
+- Be specific -- reference concrete features, fixes, and changes
 - Use past tense for completed work, present tense for ongoing work
-- Reference specific features/fixes by name, not ticket numbers or PR numbers
+- Reference features/fixes by name, not ticket or PR numbers
 - Do not invent information not present in the data
-- The summary should read like a natural status update a team lead would write
-- If a latestProjectUpdate is provided, use it for context about where the project stands overall -- but focus the summary on THIS sprint's work
-- Base the status on project progress percentage and health: 100% = Completed, 1-99% = In Progress, 0% or health "offTrack"/"atRisk" = Paused.
+- Fold the latestProjectUpdate content directly into the paragraph when present
+- Read like a natural status update a team lead would write
 
 Project data:
 {projectData}
 
 Respond ONLY with this exact JSON (no markdown, no code fences):
-{"summary": "...", "status": "..."}`;
+{"summary": "..."}`;
 
 const TOP_ITEMS_PROMPT = `You are a technical writer selecting headline items for a biweekly sprint report.
 
@@ -51,11 +54,23 @@ Uncategorized PRs:
 Respond ONLY with this exact JSON (no markdown, no code fences):
 {"topItems": [{"headline": "...", "platform": "Android|iOS|Web|Server|Cross-platform"}, ...]}`;
 
+const ORPHAN_PAIRING_PROMPT = `You are matching pull requests to the software project they most likely belong to.
+
+Each PR below has no explicit project link. For each one, decide whether it clearly belongs to one of the listed projects based on its title and description. Only assign a project when you are confident; otherwise use null.
+
+Projects:
+{projects}
+
+PRs:
+{prs}
+
+Respond ONLY with this exact JSON (no markdown, no code fences):
+{"assignments": [{"prNumber": 123, "projectId": "..."|null, "confidence": 0.0-1.0}]}`;
+
 function truncate(text: string, maxLen: number): string | undefined {
   if (!text || !text.trim()) return undefined;
   const cleaned = text.trim();
-  if (cleaned.length <= maxLen) return cleaned;
-  return cleaned.slice(0, maxLen) + "...";
+  return cleaned.length <= maxLen ? cleaned : cleaned.slice(0, maxLen) + "...";
 }
 
 function extractJson(text: string): string {
@@ -66,151 +81,166 @@ function extractJson(text: string): string {
   return text;
 }
 
+function applyPrompts(base: string, promptConfig?: PromptConfig): string {
+  return promptConfig?.additionalInstructions
+    ? base + "\n\nAdditional instructions: " + promptConfig.additionalInstructions
+    : base;
+}
+
+function prsToReportPRs(prs: GitHubPR[]): ReportPR[] {
+  return prs.map((pr) => ({ title: pr.title, url: pr.url, number: pr.number }));
+}
+
 export async function summarizeProject(
-  group: ProjectGroup,
+  bundle: ProjectBundle,
   startDate: string,
   endDate: string,
   provider: AIProvider,
   promptConfig?: PromptConfig,
-): Promise<ProjectSummary> {
+): Promise<ReportProject> {
+  const { project } = bundle;
   const projectData = JSON.stringify(
     {
-      projectName: group.projectName,
-      projectDescription: group.projectDescription || undefined,
-      progress: group.projectProgress,
-      state: group.projectState,
-      health: group.projectHealth || undefined,
-      targetDate: group.projectTargetDate || undefined,
-      latestProjectUpdate: truncate(group.projectLatestUpdate ?? "", 800) || undefined,
-      platform: group.platform,
-      issues: group.issues.map((i) => ({
-        id: i.identifier,
-        title: i.title,
-        description: i.description || undefined,
-        status: i.status,
-      })),
-      prs: group.prs.map((p) => ({
-        title: p.title,
-        url: p.url,
-        description: truncate(p.body, 500),
-      })),
+      projectName: project.name,
+      projectDescription: project.description || undefined,
+      progress: project.progress,
+      health: project.latestUpdate?.health || undefined,
+      targetDate: project.targetDate || undefined,
+      latestProjectUpdate: truncate(project.latestUpdate?.body ?? "", 800),
+      platform: project.platform,
+      prs: bundle.prs.map((p) => ({ title: p.title, description: truncate(p.body, 500) })),
     },
     null,
     2,
   );
 
-  const basePrompt = (promptConfig?.projectSummary ?? PROJECT_SUMMARY_PROMPT)
-    .replace("{projectName}", group.projectName)
+  const base = (promptConfig?.projectSummary ?? PROJECT_SUMMARY_PROMPT)
+    .replace("{projectName}", project.name)
     .replace("{startDate}", startDate)
     .replace("{endDate}", endDate)
     .replace("{projectData}", projectData);
 
-  const prompt = promptConfig?.additionalInstructions
-    ? basePrompt + "\n\nAdditional instructions: " + promptConfig.additionalInstructions
-    : basePrompt;
+  const text = await provider.chat([{ role: "user", content: applyPrompts(base, promptConfig) }]);
 
-  const text = await provider.chat([{ role: "user", content: prompt }]);
-
-  let parsed: { summary: string; status: string };
+  let summary: string;
   try {
-    parsed = JSON.parse(extractJson(text));
+    summary = (JSON.parse(extractJson(text)) as { summary: string }).summary;
   } catch {
-    console.error(`[summarizer] Failed to parse project summary for "${group.projectName}": ${text}`);
-    parsed = {
-      summary: `Work on ${group.projectName} (${group.issues.length} issues, ${group.prs.length} PRs)`,
-      status: group.projectProgress && group.projectProgress >= 1 ? "Completed" : "In Progress",
-    };
-  }
-
-  const items: ReportItem[] = [];
-
-  for (const pr of group.prs) {
-    const linkedIssue = group.issues.find((i) =>
-      i.prUrls.some((u) => u.includes(String(pr.number))),
-    );
-    items.push({
-      title: pr.title,
-      url: pr.url,
-      linearId: linkedIssue?.identifier ?? null,
-    });
-  }
-
-  const prLinkedIssueIds = new Set(
-    items.filter((i) => i.linearId).map((i) => i.linearId),
-  );
-  for (const issue of group.issues) {
-    if (!prLinkedIssueIds.has(issue.identifier)) {
-      items.push({
-        title: issue.title,
-        url: null,
-        linearId: issue.identifier,
-      });
-    }
+    console.error(`[summarizer] Failed to parse summary for "${project.name}": ${text}`);
+    summary = `Work on ${project.name} (${bundle.prs.length} PRs merged).`;
   }
 
   return {
-    projectName: group.projectName,
-    projectUrl: group.projectUrl,
-    platform: group.platform,
-    summary: parsed.summary,
-    status: parsed.status as ProjectSummary["status"],
-    items,
+    projectName: project.name,
+    projectUrl: project.url,
+    platform: project.platform,
+    status: project.status,
+    summary,
+    prs: prsToReportPRs(bundle.prs),
   };
 }
 
+export interface OrphanPairing {
+  assigned: Array<{ pr: GitHubPR; projectId: string }>;
+  other: GitHubPR[];
+}
+
+export async function pairOrphans(
+  orphanPRs: GitHubPR[],
+  candidateProjects: LinearProject[],
+  provider: AIProvider,
+  promptConfig?: PromptConfig,
+  confidenceThreshold: number = 0.6,
+): Promise<OrphanPairing> {
+  if (orphanPRs.length === 0 || candidateProjects.length === 0) {
+    return { assigned: [], other: orphanPRs };
+  }
+
+  const projectsJson = JSON.stringify(
+    candidateProjects.map((p) => ({
+      projectId: p.id,
+      projectName: p.name,
+      platform: p.platform,
+      description: truncate(p.description ?? "", 200),
+    })),
+    null,
+    2,
+  );
+  const prsJson = JSON.stringify(
+    orphanPRs.map((p) => ({ prNumber: p.number, title: p.title, description: truncate(p.body, 300) })),
+    null,
+    2,
+  );
+
+  const base = (promptConfig?.orphanPairing ?? ORPHAN_PAIRING_PROMPT)
+    .replace("{projects}", projectsJson)
+    .replace("{prs}", prsJson);
+
+  const text = await provider.chat([{ role: "user", content: applyPrompts(base, promptConfig) }]);
+
+  let assignments: Array<{ prNumber: number; projectId: string | null; confidence: number }>;
+  try {
+    assignments = (JSON.parse(extractJson(text)) as { assignments: typeof assignments }).assignments;
+  } catch {
+    console.error(`[summarizer] Failed to parse orphan pairings: ${text}`);
+    return { assigned: [], other: orphanPRs };
+  }
+
+  const validIds = new Set(candidateProjects.map((p) => p.id));
+  const assignedByNumber = new Map<number, string>();
+  for (const a of assignments) {
+    if (a.projectId && validIds.has(a.projectId) && a.confidence >= confidenceThreshold) {
+      assignedByNumber.set(a.prNumber, a.projectId);
+    }
+  }
+
+  const assigned: OrphanPairing["assigned"] = [];
+  const other: GitHubPR[] = [];
+  for (const pr of orphanPRs) {
+    const projectId = assignedByNumber.get(pr.number);
+    if (projectId) assigned.push({ pr, projectId });
+    else other.push(pr);
+  }
+  return { assigned, other };
+}
+
 export async function selectTopItems(
-  projectSummaries: ProjectSummary[],
-  uncategorizedPRs: ReportItem[],
+  projects: ReportProject[],
+  otherPRs: GitHubPR[],
   startDate: string,
   endDate: string,
   provider: AIProvider,
   promptConfig?: PromptConfig,
 ): Promise<TopItem[]> {
   const summariesJson = JSON.stringify(
-    projectSummaries.map((p) => ({
+    projects.map((p) => ({
       project: p.projectName,
       platform: p.platform,
       summary: p.summary,
       status: p.status,
-      items: p.items.map((i) => i.title),
+      items: p.prs.map((i) => i.title),
     })),
     null,
     2,
   );
   const uncategorizedJson = JSON.stringify(
-    uncategorizedPRs.map((p) => ({ title: p.title, url: p.url })),
+    otherPRs.map((p) => ({ title: p.title, url: p.url })),
     null,
     2,
   );
 
-  const basePrompt = (promptConfig?.topItems ?? TOP_ITEMS_PROMPT)
+  const base = (promptConfig?.topItems ?? TOP_ITEMS_PROMPT)
     .replace("{startDate}", startDate)
     .replace("{endDate}", endDate)
     .replace("{projectSummaries}", summariesJson)
     .replace("{uncategorizedPRs}", uncategorizedJson);
 
-  const prompt = promptConfig?.additionalInstructions
-    ? basePrompt + "\n\nAdditional instructions: " + promptConfig.additionalInstructions
-    : basePrompt;
-
-  const text = await provider.chat([{ role: "user", content: prompt }]);
+  const text = await provider.chat([{ role: "user", content: applyPrompts(base, promptConfig) }]);
 
   try {
-    const parsed = JSON.parse(extractJson(text)) as { topItems: TopItem[] };
-    return parsed.topItems;
+    return (JSON.parse(extractJson(text)) as { topItems: TopItem[] }).topItems;
   } catch {
     console.error(`[summarizer] Failed to parse top items: ${text}`);
-    return projectSummaries.slice(0, 3).map((p) => ({
-      headline: p.summary,
-      platform: p.platform,
-    }));
+    return projects.slice(0, 3).map((p) => ({ headline: p.summary, platform: p.platform }));
   }
-}
-
-export function buildReportItemsFromPRs(prs: { title: string; url: string }[]): ReportItem[] {
-  return prs.map((pr) => ({
-    title: pr.title,
-    url: pr.url,
-    linearId: null,
-  }));
 }
