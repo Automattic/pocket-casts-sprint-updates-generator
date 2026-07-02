@@ -21,7 +21,7 @@ export const PROVIDER_DEFAULTS: Record<ProviderName, { envKey: string; defaultMo
   groq: { envKey: "GROQ_API_KEY", defaultModel: "llama-3.3-70b-versatile", label: "Groq (free)" },
   openai: { envKey: "OPENAI_API_KEY", defaultModel: "gpt-4o-mini", label: "OpenAI" },
   ollama: { envKey: "", defaultModel: "llama3.2", label: "Ollama (local)" },
-  anthropic: { envKey: "ANTHROPIC_API_KEY", defaultModel: "claude-sonnet-4-20250514", label: "Anthropic" },
+  anthropic: { envKey: "ANTHROPIC_API_KEY", defaultModel: "claude-sonnet-5", label: "Anthropic" },
 };
 
 export async function createProvider(name: ProviderName, model?: string): Promise<AIProvider> {

@@ -7,7 +7,7 @@ interface AnthropicResponse {
 export class AnthropicProvider implements AIProvider {
   readonly name = "anthropic";
 
-  constructor(private readonly defaultModel: string = "claude-sonnet-4-20250514") {}
+  constructor(private readonly defaultModel: string = "claude-sonnet-5") {}
 
   private getApiKey(): string {
     const key = process.env.ANTHROPIC_API_KEY;
@@ -23,7 +23,7 @@ export class AnthropicProvider implements AIProvider {
 
     const body: Record<string, unknown> = {
       model: options?.model ?? this.defaultModel,
-      max_tokens: options?.maxTokens ?? 512,
+      max_tokens: options?.maxTokens ?? 1024,
       messages: nonSystemMsgs.map((m) => ({ role: m.role, content: m.content })),
     };
 
