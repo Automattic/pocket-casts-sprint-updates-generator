@@ -1,4 +1,4 @@
-import { createInterface } from "node:readline/promises";
+import { createInterface, Interface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { execSync } from "node:child_process";
 import {
@@ -9,7 +9,7 @@ import {
   ENV_PATH,
 } from "../config.js";
 import { PROVIDER_DEFAULTS } from "../ai/provider.js";
-import type { SprintConfig, RepoConfig, MemberConfig, AIConfig, PromptConfig } from "../types.js";
+import type { SprintConfig, MemberConfig, AIConfig, PromptConfig } from "../types.js";
 import type { ProviderName } from "../ai/provider.js";
 
 export async function setupAction(): Promise<void> {
@@ -20,15 +20,14 @@ export async function setupAction(): Promise<void> {
     console.log("=".repeat(40));
     console.log("");
 
-    // Step 1: Linear API Key
     console.log("Step 1: Linear API Key");
     console.log("  Get one at: Linear > Settings > Account > Security & Access");
-    const linearKey = await rl.question("  Enter your Linear API key: ");
-    if (!linearKey.trim()) {
+    const linearKey = (await rl.question("  Enter your Linear API key: ")).trim();
+    if (!linearKey) {
       console.error("  Error: Linear API key is required.");
       return;
     }
-    const linearResult = await validateLinearKey(linearKey.trim());
+    const linearResult = await validateLinearKey(linearKey);
     if (!linearResult.ok) {
       console.error(`  Error: ${linearResult.detail}`);
       return;
@@ -36,7 +35,6 @@ export async function setupAction(): Promise<void> {
     console.log(`  ✓ ${linearResult.detail}`);
     console.log("");
 
-    // Step 2: GitHub CLI
     console.log("Step 2: GitHub CLI");
     const ghResult = validateGitHub();
     if (!ghResult.ok) {
@@ -47,234 +45,132 @@ export async function setupAction(): Promise<void> {
     console.log(`  ✓ ${ghResult.detail}`);
     console.log("");
 
-    // Step 3: AI Provider
     console.log("Step 3: AI Provider");
-    const providerNames: ProviderName[] = ["groq", "openai", "ollama", "anthropic"];
+    const providerNames: ProviderName[] = ["anthropic", "groq", "openai", "ollama"];
     for (let i = 0; i < providerNames.length; i++) {
-      const p = providerNames[i];
-      console.log(`  ${i + 1}. ${PROVIDER_DEFAULTS[p].label}`);
+      console.log(`  ${i + 1}. ${PROVIDER_DEFAULTS[providerNames[i]].label}`);
     }
     const providerChoice = await rl.question("  Choose provider (1-4) [1]: ");
     const providerIdx = parseInt(providerChoice || "1", 10) - 1;
-    const providerName = providerNames[providerIdx] ?? "groq";
+    const providerName = providerNames[providerIdx] ?? "anthropic";
     const providerMeta = PROVIDER_DEFAULTS[providerName];
 
     let aiEnvKey = "";
     let aiEnvValue = "";
 
     if (providerName === "ollama") {
-      const ollamaUrl = await rl.question("  Ollama URL [http://localhost:11434]: ");
-      if (ollamaUrl.trim()) {
+      const ollamaUrl = (await rl.question("  Ollama URL [http://localhost:11434]: ")).trim();
+      if (ollamaUrl) {
         aiEnvKey = "OLLAMA_URL";
-        aiEnvValue = ollamaUrl.trim();
+        aiEnvValue = ollamaUrl;
       }
-      // Validate
-      process.env.OLLAMA_URL = ollamaUrl.trim() || "http://localhost:11434";
-      const { OllamaProvider } = await import("../ai/ollama.js");
-      const ollamaProvider = new OllamaProvider();
-      const ollamaResult = await ollamaProvider.validate();
-      if (!ollamaResult.ok) {
-        console.error(`  Warning: ${ollamaResult.detail}`);
-        console.log("  Continuing anyway -- you can start Ollama later.");
-      } else {
-        console.log(`  ✓ ${ollamaResult.detail}`);
-      }
+      process.env.OLLAMA_URL = ollamaUrl || "http://localhost:11434";
     } else {
       aiEnvKey = providerMeta.envKey;
-      const keyPrompt = `  Enter your ${providerMeta.label} API key: `;
-      aiEnvValue = (await rl.question(keyPrompt)).trim();
+      aiEnvValue = (await rl.question(`  Enter your ${providerMeta.label} API key: `)).trim();
       if (!aiEnvValue) {
         console.error(`  Error: API key is required for ${providerMeta.label}.`);
         return;
       }
-      // Quick validation
       process.env[aiEnvKey] = aiEnvValue;
-      console.log("  Validating...");
-      try {
-        const { createProvider } = await import("../ai/provider.js");
-        const testProvider = await createProvider(providerName);
-        const result = await testProvider.validate();
-        if (result.ok) {
-          console.log(`  ✓ ${result.detail}`);
-        } else {
-          console.error(`  Warning: ${result.detail}`);
-          console.log("  Continuing anyway -- check the key later with 'sprint-report status'.");
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`  Warning: ${msg}`);
-      }
     }
+    await validateProvider(providerName);
 
-    const modelDefault = providerMeta.defaultModel;
-    const modelInput = await rl.question(`  Model [${modelDefault}]: `);
-    const model = modelInput.trim() || modelDefault;
+    const modelInput = await rl.question(`  Model [${providerMeta.defaultModel}]: `);
+    const model = modelInput.trim() || providerMeta.defaultModel;
+    const aiConfig: AIConfig = { provider: providerName, model };
     console.log("");
 
-    const aiConfig: AIConfig = { provider: providerName, model };
-
-    // Step 4: GitHub Organization
     console.log("Step 4: GitHub Organization");
     const githubOrg = (await rl.question("  GitHub org [Automattic]: ")).trim() || "Automattic";
     console.log("");
 
-    // Step 5: Repositories
-    console.log("Step 5: Repositories");
-    const reposInput = await rl.question("  Repo names (comma-separated): ");
-    const repoNames = reposInput
-      .split(",")
-      .map((r) => r.trim())
-      .filter(Boolean);
-    if (repoNames.length === 0) {
-      console.error("  Error: At least one repo is required.");
-      return;
-    }
-
-    const repos: RepoConfig[] = [];
-    for (const name of repoNames) {
-      const guessedPlatform = guessPlatform(name);
-      const platform = (
-        await rl.question(`  Platform for ${name} [${guessedPlatform}]: `)
-      ).trim() || guessedPlatform;
-      repos.push({ name, platform });
-    }
+    console.log("Step 5: Repository Prefix");
+    console.log("  All non-archived repos in the org starting with this prefix are scanned.");
+    const repoPrefix = (await rl.question("  Repo prefix [pocket-casts]: ")).trim() || "pocket-casts";
     console.log("");
 
-    // Step 6: Linear Team Keys
-    console.log("Step 6: Linear Teams");
+    console.log("Step 6: Linear Teams -> Platforms");
     console.log("  Fetching teams from Linear...");
-    const teams = await fetchLinearTeams(linearKey.trim());
+    const teams = await fetchLinearTeams(linearKey);
     if (teams.length > 0) {
-      const filterInput = await rl.question("  Search teams (e.g., 'pocket' to filter, or empty to show all): ");
-      const filter = filterInput.trim().toLowerCase();
+      const filter = (await rl.question("  Search teams (substring, or empty for all): ")).trim().toLowerCase();
       const filtered = filter
         ? teams.filter((t) => t.name.toLowerCase().includes(filter) || t.key.toLowerCase().includes(filter))
         : teams;
-
-      if (filtered.length === 0) {
-        console.log(`  No teams match '${filter}'.`);
-      } else {
-        console.log(`  Available teams${filter ? ` matching '${filter}'` : ""}:`);
-        for (const team of filtered) {
-          console.log(`    ${team.key.padEnd(12)} ${team.name}`);
-        }
+      for (const team of filtered) {
+        console.log(`    ${team.key.padEnd(12)} ${team.name}`);
       }
-      console.log("");
     }
-    console.log("  Enter the team key prefixes to track (these appear in ticket IDs, e.g., PCDROID-123).");
-    const teamKeysInput = await rl.question("  Team keys (comma-separated): ");
-    const linearTeamKeys = teamKeysInput
-      .split(",")
-      .map((k) => k.trim().toUpperCase())
-      .filter(Boolean);
-    if (linearTeamKeys.length === 0) {
+    const teamKeysInput = await rl.question("  Team keys to track (comma-separated): ");
+    const teamKeys = teamKeysInput.split(",").map((k) => k.trim().toUpperCase()).filter(Boolean);
+    if (teamKeys.length === 0) {
       console.error("  Error: At least one team key is required.");
       return;
     }
-    const selectedNames = linearTeamKeys.map((k) => {
-      const team = teams.find((t) => t.key === k);
-      return team ? `${k} (${team.name})` : k;
-    });
-    console.log(`  ✓ Selected: ${selectedNames.join(", ")}`);
+    const teamKeyPlatformMap: Record<string, string> = {};
+    for (const key of teamKeys) {
+      const guessed = guessPlatform(key);
+      teamKeyPlatformMap[key] = (await rl.question(`  Platform for ${key} [${guessed}]: `)).trim() || guessed;
+    }
     console.log("");
 
-    // Step 7: Team Members
     console.log("Step 7: Team Members");
     const members: Record<string, MemberConfig> = {};
     let firstMember = "";
-
     while (true) {
-      const username = (
-        await rl.question("  GitHub username (or empty to finish): ")
-      ).trim();
+      const username = (await rl.question("  GitHub username (or empty to finish): ")).trim();
       if (!username) break;
-
-      const email = (
-        await rl.question(`  Linear email for ${username}: `)
-      ).trim();
-      if (!email) {
-        console.error("  Email is required. Skipping.");
-        continue;
-      }
-
-      const displayName = (
-        await rl.question(`  Display name [${username}]: `)
-      ).trim() || username;
-
-      members[username] = { linearEmail: email, name: displayName };
+      const linear = (await rl.question(`  Linear handle for ${username}: `)).trim();
+      const displayName = (await rl.question(`  Display name [${username}]: `)).trim() || username;
+      members[username] = { linear, name: displayName };
       if (!firstMember) firstMember = username;
     }
-
     if (Object.keys(members).length === 0) {
       console.error("  Error: At least one team member is required.");
       return;
     }
     console.log("");
 
-    // Step 8: Default Author
     console.log("Step 8: Default Author");
-    const memberList = Object.keys(members).join(", ");
     const defaultAuthor = (
-      await rl.question(`  Default author [${firstMember}] (${memberList}): `)
+      await rl.question(`  Default author [${firstMember}] (${Object.keys(members).join(", ")}): `)
     ).trim() || firstMember;
-
     if (!members[defaultAuthor]) {
       console.error(`  Error: '${defaultAuthor}' is not in the members list.`);
       return;
     }
     console.log("");
 
-    // Step 9: Sprint Cadence
     console.log("Step 9: Sprint Cadence");
-    console.log("  The tool calculates sprint windows from a known start date.");
-    const anchorDate = (
-      await rl.question("  A recent sprint start date (YYYY-MM-DD, Sunday): ")
-    ).trim();
-    if (!anchorDate || !/^\d{4}-\d{2}-\d{2}$/.test(anchorDate)) {
+    const anchorDate = (await rl.question("  A recent sprint start date (YYYY-MM-DD, Sunday): ")).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(anchorDate)) {
       console.error("  Error: Invalid date format. Use YYYY-MM-DD.");
       return;
     }
-    const durationInput = (
-      await rl.question("  Sprint duration in weeks [2]: ")
-    ).trim();
-    const durationWeeks = parseInt(durationInput || "2", 10);
-    console.log(`  ✓ Sprints: ${durationWeeks}-week cycles starting from ${anchorDate}`);
+    const durationWeeks = parseInt((await rl.question("  Sprint duration in weeks [2]: ")).trim() || "2", 10);
     console.log("");
 
-    // Step 10: AI Prompt Customization (optional)
     console.log("Step 10: AI Prompt Customization (optional)");
-    console.log("  You can add extra instructions that will be appended to all AI prompts.");
-    console.log("  Example: 'Focus on user-facing changes. Keep summaries concise.'");
-    console.log("  Full prompt overrides can be set directly in config.json.");
-    const additionalInstructions = (
-      await rl.question("  Additional AI instructions (optional): ")
-    ).trim();
-
-    let promptsConfig: PromptConfig | undefined;
-    if (additionalInstructions) {
-      promptsConfig = { additionalInstructions };
-      console.log("  ✓ Custom instructions saved.");
-    } else {
-      console.log("  Using default prompts.");
-    }
+    const additionalInstructions = (await rl.question("  Additional AI instructions (optional): ")).trim();
+    const prompts: PromptConfig | undefined = additionalInstructions ? { additionalInstructions } : undefined;
     console.log("");
 
-    // Save everything
     const config: SprintConfig = {
       githubOrg,
-      repos,
-      linearTeamKeys,
+      repoPrefix,
+      teamKeyPlatformMap,
       members,
       defaultAuthor,
       ai: aiConfig,
       sprint: { anchorDate, durationWeeks },
       repoPlatformMap: {},
-      ...(promptsConfig ? { prompts: promptsConfig } : {}),
+      ...(prompts ? { prompts } : {}),
     };
 
     ensureConfigDir();
     saveConfig(config);
-    saveEnvKey("LINEAR_API_KEY", linearKey.trim());
+    saveEnvKey("LINEAR_API_KEY", linearKey);
     if (aiEnvKey && aiEnvValue) {
       saveEnvKey(aiEnvKey, aiEnvValue);
     }
@@ -289,40 +185,63 @@ export async function setupAction(): Promise<void> {
   }
 }
 
-async function validateLinearKey(
-  key: string,
-): Promise<{ ok: boolean; detail: string }> {
+export async function ensureCredentials(config: SprintConfig, needAiKey: boolean = true): Promise<void> {
+  const providerMeta = PROVIDER_DEFAULTS[config.ai.provider];
+  const needsLinear = !process.env.LINEAR_API_KEY;
+  const needsAi = needAiKey && Boolean(providerMeta.envKey) && !process.env[providerMeta.envKey];
+  if (!needsLinear && !needsAi) return;
+
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    console.error("\nFirst run: a couple of API keys are needed (saved to ~/.sprint-report/.env).\n");
+    if (needsLinear) {
+      await promptKey(rl, "LINEAR_API_KEY", "Linear API key (Linear > Settings > Security & Access)");
+    }
+    if (needsAi) {
+      await promptKey(rl, providerMeta.envKey, `${providerMeta.label} API key`);
+    }
+    console.error("");
+  } finally {
+    rl.close();
+  }
+}
+
+async function promptKey(rl: Interface, envKey: string, label: string): Promise<void> {
+  const value = (await rl.question(`  Enter your ${label}: `)).trim();
+  if (!value) {
+    throw new Error(`${envKey} is required.`);
+  }
+  process.env[envKey] = value;
+  saveEnvKey(envKey, value);
+}
+
+async function validateProvider(providerName: ProviderName): Promise<void> {
+  try {
+    const { createProvider } = await import("../ai/provider.js");
+    const result = await (await createProvider(providerName)).validate();
+    console.log(result.ok ? `  ✓ ${result.detail}` : `  Warning: ${result.detail}`);
+  } catch (err) {
+    console.error(`  Warning: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function validateLinearKey(key: string): Promise<{ ok: boolean; detail: string }> {
   try {
     const response = await fetch("https://api.linear.app/graphql", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: key,
-      },
-      body: JSON.stringify({
-        query: "{ viewer { name email organization { name } } }",
-      }),
+      headers: { "Content-Type": "application/json", Authorization: key },
+      body: JSON.stringify({ query: "{ viewer { name organization { name } } }" }),
     });
-
     const json = (await response.json()) as {
       data?: { viewer?: { name: string; organization?: { name: string } } };
       errors?: Array<{ message: string }>;
     };
-
-    if (json.errors?.length) {
-      return { ok: false, detail: json.errors[0].message };
-    }
-
+    if (json.errors?.length) return { ok: false, detail: json.errors[0].message };
     const viewer = json.data?.viewer;
-    if (!viewer) {
-      return { ok: false, detail: "Could not fetch user info" };
-    }
-
-    const org = viewer.organization?.name ?? "unknown workspace";
-    return { ok: true, detail: `Connected as "${viewer.name}" (${org})` };
+    if (!viewer) return { ok: false, detail: "Could not fetch user info" };
+    return { ok: true, detail: `Connected as "${viewer.name}" (${viewer.organization?.name ?? "unknown"})` };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, detail: `Connection failed: ${msg}` };
+    return { ok: false, detail: `Connection failed: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
 
@@ -332,45 +251,31 @@ function validateGitHub(): { ok: boolean; detail: string } {
       encoding: "utf-8",
       timeout: 15_000,
     });
-    const match = output.match(/Logged in to [^ ]+ account (\S+)/i)
-      ?? output.match(/Logged in to [^ ]+ as (\S+)/i);
-    if (match) {
-      const username = match[1].replace(/[()]/g, "");
-      return { ok: true, detail: `Authenticated as ${username}` };
-    }
+    const match = output.match(/Logged in to [^ ]+ account (\S+)/i) ?? output.match(/Logged in to [^ ]+ as (\S+)/i);
+    if (match) return { ok: true, detail: `Authenticated as ${match[1].replace(/[()]/g, "")}` };
     return { ok: false, detail: "gh CLI is not authenticated" };
   } catch {
     return { ok: false, detail: "gh CLI is not authenticated" };
   }
 }
 
-async function fetchLinearTeams(
-  apiKey: string,
-): Promise<Array<{ key: string; name: string }>> {
+async function fetchLinearTeams(apiKey: string): Promise<Array<{ key: string; name: string }>> {
   try {
     const response = await fetch("https://api.linear.app/graphql", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: apiKey,
-      },
-      body: JSON.stringify({
-        query: "{ teams(first: 250) { nodes { key name } } }",
-      }),
+      headers: { "Content-Type": "application/json", Authorization: apiKey },
+      body: JSON.stringify({ query: "{ teams(first: 250) { nodes { key name } } }" }),
     });
-    const json = (await response.json()) as {
-      data?: { teams?: { nodes: Array<{ key: string; name: string }> } };
-    };
-    const teams = json.data?.teams?.nodes ?? [];
-    return teams.sort((a, b) => a.key.localeCompare(b.key));
+    const json = (await response.json()) as { data?: { teams?: { nodes: Array<{ key: string; name: string }> } } };
+    return (json.data?.teams?.nodes ?? []).sort((a, b) => a.key.localeCompare(b.key));
   } catch {
     return [];
   }
 }
 
-function guessPlatform(repoName: string): string {
-  const lower = repoName.toLowerCase();
-  if (lower.includes("android")) return "Android";
+function guessPlatform(key: string): string {
+  const lower = key.toLowerCase();
+  if (lower.includes("droid") || lower.includes("android")) return "Android";
   if (lower.includes("ios")) return "iOS";
   if (lower.includes("web")) return "Web";
   if (lower.includes("server") || lower.includes("api")) return "Server";

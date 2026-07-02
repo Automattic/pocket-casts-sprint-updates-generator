@@ -23,15 +23,16 @@ export async function statusAction(): Promise<void> {
   console.log("");
 
   if (!configExists()) {
-    console.log("No config found. Run 'sprint-report setup' first.");
-    return;
+    console.log("No config file found -- using built-in default config.");
+    console.log("Run 'sprint-report setup' to customize.");
+    console.log("");
   }
 
   loadEnv();
   const config = loadConfig();
 
   // AI Provider
-  const providerName = config.ai?.provider ?? "groq";
+  const providerName = config.ai?.provider ?? "anthropic";
   const providerLabel = PROVIDER_DEFAULTS[providerName]?.label ?? providerName;
   const model = config.ai?.model ?? PROVIDER_DEFAULTS[providerName]?.defaultModel ?? "unknown";
   console.log(`AI Provider: ${providerLabel} (${model})`);
@@ -98,7 +99,10 @@ export async function statusAction(): Promise<void> {
   } else {
     console.log("  API Key: ✗ LINEAR_API_KEY not set");
   }
-  console.log(`  Teams:   ${config.linearTeamKeys.join(", ")}`);
+  const teamMap = Object.entries(config.teamKeyPlatformMap)
+    .map(([key, platform]) => `${key}→${platform}`)
+    .join(", ");
+  console.log(`  Teams:   ${teamMap}`);
   console.log("");
 
   // GitHub
@@ -120,15 +124,14 @@ export async function statusAction(): Promise<void> {
     console.log("  CLI Auth: ✗ not authenticated (run 'gh auth login')");
   }
   console.log(`  Org:      ${config.githubOrg}`);
-  const repoList = config.repos.map((r) => `${r.name} (${r.platform})`).join(", ");
-  console.log(`  Repos:    ${repoList}`);
+  console.log(`  Repos:    ${config.repoPrefix}* (discovered at runtime)`);
   console.log("");
 
   // Members
   console.log("Members:");
   for (const [username, member] of Object.entries(config.members)) {
     const isDefault = username === config.defaultAuthor ? " [default]" : "";
-    console.log(`  ${username.padEnd(16)} → ${member.linearEmail} (${member.name})${isDefault}`);
+    console.log(`  ${username.padEnd(16)} → ${member.linear} (${member.name})${isDefault}`);
   }
   console.log("");
 
