@@ -145,6 +145,8 @@ export interface OrphanPairing {
   other: GitHubPR[];
 }
 
+const ORPHAN_CHUNK = 25;
+
 export async function pairOrphans(
   orphanPRs: GitHubPR[],
   candidateProjects: LinearProject[],
@@ -166,31 +168,37 @@ export async function pairOrphans(
     null,
     2,
   );
-  const prsJson = JSON.stringify(
-    orphanPRs.map((p) => ({ prNumber: p.number, title: p.title, description: truncate(p.body, 300) })),
-    null,
-    2,
-  );
-
-  const base = (promptConfig?.orphanPairing ?? ORPHAN_PAIRING_PROMPT)
-    .replace("{projects}", projectsJson)
-    .replace("{prs}", prsJson);
-
-  const text = await provider.chat([{ role: "user", content: applyPrompts(base, promptConfig) }]);
-
-  let assignments: Array<{ prNumber: number; projectId: string | null; confidence: number }>;
-  try {
-    assignments = (JSON.parse(extractJson(text)) as { assignments: typeof assignments }).assignments;
-  } catch {
-    console.error(`[summarizer] Failed to parse orphan pairings: ${text}`);
-    return { assigned: [], other: orphanPRs };
-  }
-
   const validIds = new Set(candidateProjects.map((p) => p.id));
   const assignedByNumber = new Map<number, string>();
-  for (const a of assignments) {
-    if (a.projectId && validIds.has(a.projectId) && a.confidence >= confidenceThreshold) {
-      assignedByNumber.set(a.prNumber, a.projectId);
+
+  for (let i = 0; i < orphanPRs.length; i += ORPHAN_CHUNK) {
+    const batch = orphanPRs.slice(i, i + ORPHAN_CHUNK);
+    const prsJson = JSON.stringify(
+      batch.map((p) => ({ prNumber: p.number, title: p.title, description: truncate(p.body, 300) })),
+      null,
+      2,
+    );
+    const base = (promptConfig?.orphanPairing ?? ORPHAN_PAIRING_PROMPT)
+      .replace("{projects}", projectsJson)
+      .replace("{prs}", prsJson);
+
+    const text = await provider.chat(
+      [{ role: "user", content: applyPrompts(base, promptConfig) }],
+      { maxTokens: 2048 },
+    );
+
+    let assignments: Array<{ prNumber: number; projectId: string | null; confidence: number }>;
+    try {
+      assignments = (JSON.parse(extractJson(text)) as { assignments: typeof assignments }).assignments;
+    } catch {
+      console.error(`[summarizer] Failed to parse orphan pairings for batch at ${i}: ${text}`);
+      continue;
+    }
+
+    for (const a of assignments) {
+      if (a.projectId && validIds.has(a.projectId) && a.confidence >= confidenceThreshold) {
+        assignedByNumber.set(a.prNumber, a.projectId);
+      }
     }
   }
 
@@ -224,7 +232,7 @@ export async function selectTopItems(
     2,
   );
   const uncategorizedJson = JSON.stringify(
-    otherPRs.map((p) => ({ title: p.title, url: p.url })),
+    otherPRs.slice(0, 50).map((p) => ({ title: p.title, url: p.url })),
     null,
     2,
   );
