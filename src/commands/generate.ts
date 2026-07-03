@@ -33,6 +33,7 @@ export interface GenerateOptions {
   output: string;
   format: string;
   ai: boolean;
+  orphanPairing: boolean;
   dryRun: boolean;
   verbose: boolean;
 }
@@ -95,11 +96,15 @@ export async function generateAction(options: GenerateOptions): Promise<void> {
     const provider = await createProvider(config.ai.provider, config.ai.model);
     console.error(`Generating AI summaries (${provider.name})...`);
 
-    const candidateProjects: LinearProject[] = bundles.map((b) => b.project);
-    console.error("  Pairing orphan PRs...");
-    const { assigned, other } = await pairOrphans(orphanPRs, candidateProjects, provider, config.prompts);
-    for (const { pr, projectId } of assigned) {
-      addPRToBundle(bundles, projectId, pr);
+    let other = orphanPRs;
+    if (options.orphanPairing) {
+      const candidateProjects: LinearProject[] = bundles.map((b) => b.project);
+      console.error("  Pairing orphan PRs...");
+      const paired = await pairOrphans(orphanPRs, candidateProjects, provider, config.prompts);
+      other = paired.other;
+      for (const { pr, projectId } of paired.assigned) {
+        addPRToBundle(bundles, projectId, pr);
+      }
     }
 
     const groups = groupBundlesByInitiative(bundles);

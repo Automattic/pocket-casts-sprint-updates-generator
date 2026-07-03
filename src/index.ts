@@ -59,6 +59,7 @@ const generateCmd = program
   .option("--output <path>", "Output HTML file path", "./sprint-report.html")
   .option("--format <format>", "Output: html, markdown, both", "both")
   .option("--no-ai", "Skip AI summarization, output raw grouped data")
+  .option("--no-orphan-pairing", "Skip AI pairing of orphan PRs; send them straight to Other")
   .option("--dry-run", "Fetch data only, print stats")
   .option("--verbose", "Print debug information")
   .action(async (options: GenerateOptions) => {
