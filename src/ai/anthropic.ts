@@ -39,6 +39,7 @@ export class AnthropicProvider implements AIProvider {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(90_000),
     });
 
     if (!response.ok) {
