@@ -117,7 +117,7 @@ export async function fetchTicketsByIdentifier(
 
   for (const group of chunk(parsed, IDENTIFIER_CHUNK)) {
     const filter = {
-      or: group.map((p) => ({ team: { key: { eq: p.teamKey } }, number: { eq: p.number } })),
+      or: group.map((p) => ({ and: [{ team: { key: { eq: p.teamKey } } }, { number: { eq: p.number } }] })),
     };
 
     if (verbose) {

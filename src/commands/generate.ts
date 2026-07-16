@@ -10,7 +10,7 @@ import {
   saveHistoryEntry,
 } from "../config.js";
 import { discoverRepos, fetchMergedPRs } from "../github-client.js";
-import { resolve, groupBundlesByInitiative, addPRToBundle } from "../correlator.js";
+import { resolve, groupBundlesByInitiative, addPRToBundle, splitBundleByPlatform } from "../correlator.js";
 import { summarizeProject, pairOrphans, selectTopItems } from "../summarizer.js";
 import { formatHtml, formatMarkdown, formatRawGrouped } from "../formatter.js";
 import { createProvider } from "../ai/provider.js";
@@ -113,10 +113,12 @@ export async function generateAction(options: GenerateOptions): Promise<void> {
     for (const group of groups) {
       const projects: ReportProject[] = [];
       for (const bundle of group.bundles) {
-        console.error(`  Summarizing: ${bundle.project.name}...`);
-        const summary = await summarizeProject(bundle, startDate, endDate, provider, config.prompts);
-        projects.push(summary);
-        allProjects.push(summary);
+        for (const slice of splitBundleByPlatform(bundle, config.teamKeyPlatformMap)) {
+          console.error(`  Summarizing: ${slice.project.platform}: ${slice.project.name}...`);
+          const summary = await summarizeProject(slice, startDate, endDate, provider, config.prompts);
+          projects.push(summary);
+          allProjects.push(summary);
+        }
       }
       initiatives.push({
         initiativeName: group.initiativeName,
@@ -134,14 +136,16 @@ export async function generateAction(options: GenerateOptions): Promise<void> {
     const initiatives: ReportInitiative[] = groups.map((group) => ({
       initiativeName: group.initiativeName,
       initiativeUrl: group.initiativeUrl,
-      projects: group.bundles.map((bundle) => ({
-        projectName: bundle.project.name,
-        projectUrl: bundle.project.url,
-        platform: bundle.project.platform,
-        status: bundle.project.status,
-        summary: `${bundle.prs.length} PRs merged`,
-        prs: bundle.prs.map((pr) => ({ title: pr.title, url: pr.url, number: pr.number })),
-      })),
+      projects: group.bundles.flatMap((bundle) =>
+        splitBundleByPlatform(bundle, config.teamKeyPlatformMap).map((slice) => ({
+          projectName: slice.project.name,
+          projectUrl: slice.project.url,
+          platform: slice.project.platform,
+          status: slice.project.status,
+          summary: `${slice.prs.length} PRs merged`,
+          prs: slice.prs.map((pr) => ({ title: pr.title, url: pr.url, number: pr.number })),
+        })),
+      ),
     }));
 
     report = { startDate, endDate, topItems: [], initiatives, otherByPlatform: bucketByPlatform(orphanPRs) };

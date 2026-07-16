@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractLinearRefs, groupBundlesByInitiative, addPRToBundle } from "../correlator.js";
+import { extractLinearRefs, groupBundlesByInitiative, addPRToBundle, splitBundleByPlatform } from "../correlator.js";
 import type { GitHubPR, LinearProject, ProjectBundle } from "../types.js";
 
 function makePR(number: number, overrides: Partial<GitHubPR> = {}): GitHubPR {
@@ -57,6 +57,41 @@ describe("extractLinearRefs", () => {
 
   it("returns nothing for text without refs", () => {
     expect(extractLinearRefs("no references here")).toEqual([]);
+  });
+});
+
+describe("splitBundleByPlatform", () => {
+  const map = { PCDROID: "Android", PCIOS: "iOS", PCWEB: "Web", PCSERVER: "Server" };
+
+  it("keeps a single-platform bundle as one slice", () => {
+    const bundle = makeBundle(makeProject("a"), [makePR(1), makePR(2)]);
+    const slices = splitBundleByPlatform(bundle, map);
+    expect(slices).toHaveLength(1);
+    expect(slices[0].project.platform).toBe("Android");
+    expect(slices[0].prs).toHaveLength(2);
+  });
+
+  it("splits a cross-platform project by the PRs' own platforms", () => {
+    const project = makeProject("a", { teamKeys: ["PCDROID", "PCIOS"] });
+    const android = makePR(1, { platform: "Android", repository: "pocket-casts-android" });
+    const ios = makePR(2, { platform: "iOS", repository: "pocket-casts-ios" });
+    const web = makePR(3, { platform: "Web", repository: "pocket-casts-webplayer" });
+    const slices = splitBundleByPlatform(makeBundle(project, [android, ios, web]), map);
+    const byPlatform = Object.fromEntries(slices.map((s) => [s.project.platform, s.prs]));
+    expect(slices).toHaveLength(3);
+    expect(byPlatform.Android.map((p) => p.number)).toEqual([1]);
+    expect(byPlatform.iOS.map((p) => p.number)).toEqual([2]);
+    expect(byPlatform.Web.map((p) => p.number)).toEqual([3]);
+  });
+
+  it("attaches shared-repo (Other) PRs to the primary platform instead of splitting", () => {
+    const project = makeProject("a", { teamKeys: ["PCDROID"] });
+    const android = makePR(1, { platform: "Android" });
+    const tooling = makePR(2, { platform: "Other", repository: "pocket-casts-collage-image" });
+    const slices = splitBundleByPlatform(makeBundle(project, [android, tooling]), map);
+    expect(slices).toHaveLength(1);
+    expect(slices[0].project.platform).toBe("Android");
+    expect(slices[0].prs).toHaveLength(2);
   });
 });
 

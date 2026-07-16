@@ -87,6 +87,44 @@ function resolvePlatform(
   return pr;
 }
 
+// A single Linear project can span platform teams (e.g. HLS Support with
+// Android + iOS + Web PRs). Split such a bundle into one sub-bundle per platform
+// so each renders as its own line with only its own PRs. PRs from shared/tooling
+// repos (platform "Other") attach to the project's primary platform rather than
+// spawning a separate line.
+export function splitBundleByPlatform(
+  bundle: ProjectBundle,
+  map: Record<string, string>,
+): ProjectBundle[] {
+  const primary = resolvePlatform(bundle.project.teamKeys, map, bundle.prs);
+  const displayPlatform = (pr: GitHubPR): string =>
+    pr.platform && pr.platform !== "Other" ? pr.platform : primary;
+
+  const byPlatform = new Map<string, GitHubPR[]>();
+  for (const pr of bundle.prs) {
+    const plat = displayPlatform(pr);
+    (byPlatform.get(plat) ?? byPlatform.set(plat, []).get(plat)!).push(pr);
+  }
+
+  if (byPlatform.size <= 1) {
+    return [{ ...bundle, project: { ...bundle.project, platform: primary } }];
+  }
+
+  const platforms = [...byPlatform.keys()].sort((a, b) =>
+    a === primary ? -1 : b === primary ? 1 : a.localeCompare(b),
+  );
+  return platforms.map((plat) => {
+    const prs = byPlatform.get(plat)!;
+    return {
+      project: { ...bundle.project, platform: plat },
+      prs,
+      tickets: bundle.tickets.filter((t) =>
+        prs.some((pr) => pr.linearRefs.includes(t.identifier)),
+      ),
+    };
+  });
+}
+
 function dominantPlatform(prs: GitHubPR[]): string {
   const counts = new Map<string, number>();
   for (const pr of prs) {
