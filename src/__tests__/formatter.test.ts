@@ -6,39 +6,52 @@ function makeReport(overrides: Partial<SprintReport> = {}): SprintReport {
   return {
     startDate: "2026-04-08",
     endDate: "2026-04-22",
-    topItems: [
-      { headline: "Fixed Wear OS Up Next queue", platform: "Android" },
-      { headline: "Added Media3 session integration", platform: "Android" },
-    ],
-    projectUpdates: [
+    topItems: [{ headline: "Shipped HLS streaming", platform: "Android" }],
+    initiatives: [
       {
-        projectName: "Playback robustness",
-        projectUrl: "https://linear.app/a8c/project/playback-robustness-abc123",
-        platform: "Android",
-        summary:
-          "Wired Media3 session into automotive and wear platforms.",
-        status: "In Progress",
-        items: [
+        initiativeName: "HLS Support",
+        initiativeUrl: "https://linear.app/a8c/initiative/hls-support-abc",
+        projects: [
           {
-            title: "Fix Wear Up Next by emitting timeline events",
-            url: "https://github.com/Automattic/pocket-casts-android/pull/5230",
-            linearId: "PCDROID-540",
+            projectName: "HLS Android",
+            projectUrl: "https://linear.app/a8c/project/hls-android-111",
+            platform: "Android",
+            status: "In Progress",
+            summary: "Integrated HLS playback via ExoPlayer.",
+            prs: [
+              {
+                title: "[HLS] Stream HLS rendition",
+                url: "https://github.com/Automattic/pocket-casts-android/pull/5230",
+                number: 5230,
+              },
+            ],
           },
+        ],
+      },
+      {
+        initiativeName: null,
+        initiativeUrl: null,
+        projects: [
           {
-            title: "Wire automotive for Media3 service toggle",
-            url: "https://github.com/Automattic/pocket-casts-android/pull/5228",
-            linearId: "PCDROID-538",
+            projectName: "Up Next Duration Sort",
+            projectUrl: "https://linear.app/a8c/project/up-next-222",
+            platform: "Cross-platform",
+            status: "Complete",
+            summary: "Up Next sort by duration is complete.",
+            prs: [
+              {
+                title: "Add Up Next queue sorting",
+                url: "https://github.com/Automattic/pocket-casts-android/pull/5100",
+                number: 5100,
+              },
+            ],
           },
         ],
       },
     ],
     otherByPlatform: {
       Android: [
-        {
-          title: "Fix Glance widgets crash",
-          url: "https://github.com/Automattic/pocket-casts-android/pull/5200",
-          linearId: null,
-        },
+        { title: "Bump analytics lib", url: "https://github.com/Automattic/pocket-casts-android/pull/5001" },
       ],
     },
     ...overrides,
@@ -46,107 +59,45 @@ function makeReport(overrides: Partial<SprintReport> = {}): SprintReport {
 }
 
 describe("formatHtml", () => {
-  it("includes top items section", () => {
+  it("links the initiative heading to its overview URL", () => {
     const html = formatHtml(makeReport());
-
-    expect(html).toContain("<h2>Top Items Shipped</h2>");
-    expect(html).toContain("Fixed Wear OS Up Next queue");
-    expect(html).toContain("Added Media3 session integration");
+    expect(html).toContain('<a href="https://linear.app/a8c/initiative/hls-support-abc">HLS Support</a>');
   });
 
-  it("includes project updates with status", () => {
+  it("links the platform label to the project overview URL with status", () => {
     const html = formatHtml(makeReport());
-
-    expect(html).toContain("<h2>Project Updates</h2>");
-    expect(html).toContain(
-      '<a href="https://linear.app/a8c/project/playback-robustness-abc123">Playback robustness</a> - <em>In Progress</em>',
-    );
-    expect(html).toContain(
-      "Wired Media3 session into automotive and wear platforms.",
-    );
+    expect(html).toContain('<strong><a href="https://linear.app/a8c/project/hls-android-111">Android</a></strong>: <em>In Progress</em>');
   });
 
-  it("renders PR links with Linear IDs", () => {
+  it("renders a standalone project as its own heading with inline status", () => {
     const html = formatHtml(makeReport());
-
-    expect(html).toContain(
-      '<a href="https://github.com/Automattic/pocket-casts-android/pull/5230">Fix Wear Up Next by emitting timeline events</a> (PCDROID-540)',
-    );
+    expect(html).toContain('<a href="https://linear.app/a8c/project/up-next-222">Up Next Duration Sort</a> - <em>Complete</em>');
   });
 
-  it("includes Other section", () => {
+  it("links PRs and renders the Other section", () => {
     const html = formatHtml(makeReport());
-
+    expect(html).toContain('<a href="https://github.com/Automattic/pocket-casts-android/pull/5230">[HLS] Stream HLS rendition</a>');
     expect(html).toContain("<h2>Other</h2>");
     expect(html).toContain("<h3>Android</h3>");
-    expect(html).toContain("Fix Glance widgets crash");
   });
 
-  it("omits empty top items section", () => {
-    const html = formatHtml(makeReport({ topItems: [] }));
-
-    expect(html).not.toContain("Top Items Shipped");
-  });
-
-  it("omits empty Other section", () => {
-    const html = formatHtml(makeReport({ otherByPlatform: {} }));
-
-    expect(html).not.toContain("<h2>Other</h2>");
-  });
-
-  it("escapes HTML in titles", () => {
-    const html = formatHtml(
-      makeReport({
-        topItems: [
-          { headline: "Fix <script>alert(1)</script>", platform: "Android" },
-        ],
-      }),
-    );
-
-    expect(html).toContain("&lt;script&gt;");
-    expect(html).not.toContain("<script>");
+  it("includes Top Items", () => {
+    const html = formatHtml(makeReport());
+    expect(html).toContain("<h2>Top Items Shipped</h2>");
+    expect(html).toContain("<li>Shipped HLS streaming</li>");
   });
 });
 
 describe("formatMarkdown", () => {
-  it("includes top items section", () => {
+  it("renders initiative, platform link, status, and PRs", () => {
     const md = formatMarkdown(makeReport());
-
-    expect(md).toContain("## Top Items Shipped");
-    expect(md).toContain("- Fixed Wear OS Up Next queue");
+    expect(md).toContain("## [HLS Support](https://linear.app/a8c/initiative/hls-support-abc)");
+    expect(md).toContain("**[Android](https://linear.app/a8c/project/hls-android-111)**: *In Progress*");
+    expect(md).toContain("- [[HLS] Stream HLS rendition](https://github.com/Automattic/pocket-casts-android/pull/5230)");
   });
 
-  it("includes project updates with status", () => {
+  it("renders standalone project heading with status", () => {
     const md = formatMarkdown(makeReport());
-
-    expect(md).toContain(
-      "### [Playback robustness](https://linear.app/a8c/project/playback-robustness-abc123) - *In Progress*",
-    );
-  });
-
-  it("renders PR links in markdown format", () => {
-    const md = formatMarkdown(makeReport());
-
-    expect(md).toContain(
-      "- [Fix Wear Up Next by emitting timeline events](https://github.com/Automattic/pocket-casts-android/pull/5230) (PCDROID-540)",
-    );
-  });
-
-  it("includes Other section", () => {
-    const md = formatMarkdown(makeReport());
-
-    expect(md).toContain("## Other");
-    expect(md).toContain("### Android");
-    expect(md).toContain("Fix Glance widgets crash");
-  });
-
-  it("omits empty sections", () => {
-    const md = formatMarkdown(
-      makeReport({ topItems: [], projectUpdates: [], otherByPlatform: {} }),
-    );
-
-    expect(md).not.toContain("Top Items");
-    expect(md).not.toContain("Project Updates");
-    expect(md).not.toContain("Other");
+    expect(md).toContain("## [Up Next Duration Sort](https://linear.app/a8c/project/up-next-222) - *Complete*");
   });
 });

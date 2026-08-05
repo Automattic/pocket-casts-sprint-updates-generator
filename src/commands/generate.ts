@@ -1,25 +1,28 @@
 import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve as resolvePath } from "node:path";
 import {
   loadConfig,
   loadEnv,
   getDefaultDateRange,
   resolveAuthors,
-  resolveRepos,
+  filterRepos,
   formatDate,
   saveHistoryEntry,
 } from "../config.js";
-import { fetchMergedPRs } from "../github-client.js";
-import { fetchCompletedIssues, fetchActiveProjects } from "../linear-client.js";
-import { correlate } from "../correlator.js";
-import {
-  summarizeProject,
-  selectTopItems,
-  buildReportItemsFromPRs,
-} from "../summarizer.js";
+import { discoverRepos, fetchMergedPRs } from "../github-client.js";
+import { resolve, groupBundlesByInitiative, addPRToBundle, splitBundleByPlatform } from "../correlator.js";
+import { summarizeProject, pairOrphans, selectTopItems } from "../summarizer.js";
 import { formatHtml, formatMarkdown, formatRawGrouped } from "../formatter.js";
 import { createProvider } from "../ai/provider.js";
-import type { SprintReport, ProjectSummary, ReportItem } from "../types.js";
+import { ensureCredentials } from "./setup.js";
+import type {
+  SprintReport,
+  ReportInitiative,
+  ReportProject,
+  GitHubPR,
+  LinearProject,
+  OtherItem,
+} from "../types.js";
 
 export interface GenerateOptions {
   sprintStart?: string;
@@ -30,6 +33,7 @@ export interface GenerateOptions {
   output: string;
   format: string;
   ai: boolean;
+  orphanPairing: boolean;
   dryRun: boolean;
   verbose: boolean;
 }
@@ -37,11 +41,12 @@ export interface GenerateOptions {
 export async function generateAction(options: GenerateOptions): Promise<void> {
   loadEnv();
   const config = loadConfig(options.config);
+  if (!options.dryRun) {
+    await ensureCredentials(config, options.ai);
+  }
 
-  // Resolve sprint window: --sprint-start/--sprint-length override config cadence
   let startDate: string;
   let endDate: string;
-
   if (options.sprintStart) {
     const weeks = parseInt(options.sprintLength ?? String(config.sprint?.durationWeeks ?? 2), 10);
     const start = new Date(options.sprintStart + "T00:00:00");
@@ -55,149 +60,149 @@ export async function generateAction(options: GenerateOptions): Promise<void> {
   }
 
   const authors = resolveAuthors(config, options.author);
-  const repos = resolveRepos(config, options.repos);
 
   console.error(`Sprint Report: ${startDate} to ${endDate}`);
   console.error(`Authors: ${authors.githubAuthors.join(", ")}`);
-  console.error(`Repos: ${repos.map((r) => r.name).join(", ")}`);
   console.error("");
 
-  // Fetch data in parallel
-  console.error("Fetching data...");
-  const [prs, issues, projectMetas] = await Promise.all([
-    fetchMergedPRs(config, repos, authors.githubAuthors, startDate, endDate, options.verbose),
-    fetchCompletedIssues(config, authors.linearEmails, startDate, endDate, options.verbose),
-    fetchActiveProjects(config, authors.linearEmails, startDate, endDate, options.verbose),
-  ]);
+  console.error("Discovering repositories...");
+  const discovered = await discoverRepos(config, options.verbose);
+  const repos = filterRepos(discovered, options.repos);
+  console.error(`  Repos: ${repos.length} (${config.repoPrefix}*)`);
 
+  console.error("Fetching merged PRs...");
+  const prs = await fetchMergedPRs(config, repos, authors.githubAuthors, startDate, endDate, options.verbose);
   console.error(`  GitHub PRs: ${prs.length}`);
-  console.error(`  Linear issues: ${issues.length}`);
-  console.error(`  Active projects: ${projectMetas.length}`);
   console.error("");
 
   if (options.dryRun) {
     console.error("Dry run complete. Data fetched successfully.");
-    console.error("\nGitHub PRs:");
     for (const pr of prs) {
-      console.error(`  #${pr.number} ${pr.title}`);
-    }
-    console.error("\nLinear Issues:");
-    for (const issue of issues) {
-      const project = issue.projectName ? ` [${issue.projectName}]` : "";
-      console.error(`  ${issue.identifier} ${issue.title}${project}`);
+      const refs = pr.linearRefs.length ? ` -> ${pr.linearRefs.join(", ")}` : "";
+      console.error(`  #${pr.number} [${pr.repository}] ${pr.title}${refs}`);
     }
     return;
   }
 
-  // Correlate
-  console.error("Correlating data...");
-  const { projectGroups, unmatchedPRs } = correlate(issues, prs, projectMetas, config);
-  console.error(`  Project groups: ${projectGroups.length}`);
-  console.error(`  Unmatched PRs: ${unmatchedPRs.length}`);
+  console.error("Resolving Linear projects and initiatives...");
+  const { bundles, orphanPRs } = await resolve(prs, config, options.verbose);
+  console.error(`  Projects: ${bundles.length}`);
+  console.error(`  Orphan PRs: ${orphanPRs.length}`);
   console.error("");
 
-  // Build report
   let report: SprintReport;
 
   if (options.ai) {
     const provider = await createProvider(config.ai.provider, config.ai.model);
     console.error(`Generating AI summaries (${provider.name})...`);
 
-    const projectSummaries: ProjectSummary[] = [];
-    for (const group of projectGroups) {
-      console.error(`  Summarizing: ${group.projectName}...`);
-      const summary = await summarizeProject(group, startDate, endDate, provider, config.prompts);
-      projectSummaries.push(summary);
+    let other = orphanPRs;
+    if (options.orphanPairing) {
+      const candidateProjects: LinearProject[] = bundles.map((b) => b.project);
+      console.error("  Pairing orphan PRs...");
+      const paired = await pairOrphans(orphanPRs, candidateProjects, provider, config.prompts);
+      other = paired.other;
+      for (const { pr, projectId } of paired.assigned) {
+        addPRToBundle(bundles, projectId, pr);
+      }
     }
 
-    const uncategorizedItems: ReportItem[] = buildReportItemsFromPRs(
-      unmatchedPRs.map((pr) => ({ title: pr.title, url: pr.url })),
-    );
+    const groups = groupBundlesByInitiative(bundles);
+    const initiatives: ReportInitiative[] = [];
+    const allProjects: ReportProject[] = [];
+    for (const group of groups) {
+      const projects: ReportProject[] = [];
+      for (const bundle of group.bundles) {
+        for (const slice of splitBundleByPlatform(bundle, config.teamKeyPlatformMap)) {
+          console.error(`  Summarizing: ${slice.project.platform}: ${slice.project.name}...`);
+          const summary = await summarizeProject(slice, startDate, endDate, provider, config.prompts);
+          projects.push(summary);
+          allProjects.push(summary);
+        }
+      }
+      initiatives.push({
+        initiativeName: group.initiativeName,
+        initiativeUrl: group.initiativeUrl,
+        projects,
+      });
+    }
 
     console.error("  Selecting top items...");
-    const topItems = await selectTopItems(
-      projectSummaries,
-      uncategorizedItems,
-      startDate,
-      endDate,
-      provider,
-      config.prompts,
-    );
+    const topItems = await selectTopItems(allProjects, other, startDate, endDate, provider, config.prompts);
 
-    const otherByPlatform: Record<string, ReportItem[]> = {};
-    for (const pr of unmatchedPRs) {
-      const platform = config.repoPlatformMap[pr.repository] ?? "Other";
-      if (!otherByPlatform[platform]) otherByPlatform[platform] = [];
-      otherByPlatform[platform].push({ title: pr.title, url: pr.url, linearId: null });
-    }
-
-    report = { startDate, endDate, topItems, projectUpdates: projectSummaries, otherByPlatform };
+    report = { startDate, endDate, topItems, initiatives, otherByPlatform: bucketByPlatform(other) };
   } else {
-    const projectSummaries: ProjectSummary[] = projectGroups.map((group) => {
-      const items: ReportItem[] = [
-        ...group.prs.map((pr) => ({
-          title: pr.title,
-          url: pr.url,
-          linearId:
-            group.issues.find((i) => i.prUrls.some((u) => u.includes(String(pr.number))))?.identifier ?? null,
+    const groups = groupBundlesByInitiative(bundles);
+    const initiatives: ReportInitiative[] = groups.map((group) => ({
+      initiativeName: group.initiativeName,
+      initiativeUrl: group.initiativeUrl,
+      projects: group.bundles.flatMap((bundle) =>
+        splitBundleByPlatform(bundle, config.teamKeyPlatformMap).map((slice) => ({
+          projectName: slice.project.name,
+          projectUrl: slice.project.url,
+          platform: slice.project.platform,
+          status: slice.project.status,
+          summary: `${slice.prs.length} PRs merged`,
+          prs: slice.prs.map((pr) => ({ title: pr.title, url: pr.url, number: pr.number })),
         })),
-        ...group.issues
-          .filter((i) => !group.prs.some((pr) => i.prUrls.some((u) => u.includes(String(pr.number)))))
-          .map((i) => ({ title: i.title, url: null as string | null, linearId: i.identifier })),
-      ];
+      ),
+    }));
 
-      return {
-        projectName: group.projectName,
-        projectUrl: group.projectUrl,
-        platform: group.platform,
-        summary: `${group.issues.length} issues completed, ${group.prs.length} PRs merged`,
-        status: "In Progress" as const,
-        items,
-      };
-    });
-
-    const otherByPlatform: Record<string, ReportItem[]> = {};
-    for (const pr of unmatchedPRs) {
-      const platform = config.repoPlatformMap[pr.repository] ?? "Other";
-      if (!otherByPlatform[platform]) otherByPlatform[platform] = [];
-      otherByPlatform[platform].push({ title: pr.title, url: pr.url, linearId: null });
-    }
-
-    report = { startDate, endDate, topItems: [], projectUpdates: projectSummaries, otherByPlatform };
+    report = { startDate, endDate, topItems: [], initiatives, otherByPlatform: bucketByPlatform(orphanPRs) };
   }
 
-  // Output
+  assertNoDroppedPRs(prs, report);
+
   if (options.format === "html" || options.format === "both") {
     const html = formatHtml(report);
-    const outputPath = resolve(options.output);
+    const outputPath = resolvePath(options.output);
     writeFileSync(outputPath, html, "utf-8");
     console.error(`\nHTML written to: ${outputPath}`);
   }
-
   if (options.format === "markdown" || options.format === "both") {
     console.log(formatMarkdown(report));
   }
-
   if (!options.ai) {
     console.log(formatRawGrouped(report));
   }
 
-  // Record in history (skip dry runs)
-  if (!options.dryRun) {
-    const totalPRs = report.projectUpdates.reduce((n, p) => n + p.items.filter((i) => i.url).length, 0)
-      + Object.values(report.otherByPlatform).reduce((n, items) => n + items.length, 0);
-    const totalIssues = report.projectUpdates.reduce((n, p) => n + p.items.filter((i) => i.linearId).length, 0);
+  const totalPRs = report.initiatives.reduce(
+    (n, i) => n + i.projects.reduce((m, p) => m + p.prs.length, 0),
+    0,
+  ) + Object.values(report.otherByPlatform).reduce((n, items) => n + items.length, 0);
 
-    saveHistoryEntry({
-      startDate,
-      endDate,
-      generatedAt: new Date().toISOString(),
-      author: authors.githubAuthors.join(", "),
-      projectCount: report.projectUpdates.length,
-      prCount: totalPRs,
-      issueCount: totalIssues,
-    });
-  }
+  saveHistoryEntry({
+    startDate,
+    endDate,
+    generatedAt: new Date().toISOString(),
+    author: authors.githubAuthors.join(", "),
+    projectCount: report.initiatives.reduce((n, i) => n + i.projects.length, 0),
+    prCount: totalPRs,
+    issueCount: 0,
+  });
 
   console.error("\nDone!");
+}
+
+function bucketByPlatform(prs: GitHubPR[]): Record<string, OtherItem[]> {
+  const out: Record<string, OtherItem[]> = {};
+  for (const pr of prs) {
+    const platform = pr.platform || "Other";
+    (out[platform] ??= []).push({ title: pr.title, url: pr.url });
+  }
+  return out;
+}
+
+function assertNoDroppedPRs(prs: GitHubPR[], report: SprintReport): void {
+  const rendered = new Set<string>([
+    ...report.initiatives.flatMap((i) => i.projects.flatMap((p) => p.prs.map((pr) => pr.url))),
+    ...Object.values(report.otherByPlatform).flatMap((items) => items.map((i) => i.url)),
+  ]);
+  const dropped = prs.filter((pr) => !rendered.has(pr.url));
+  if (dropped.length > 0) {
+    console.error(`  WARNING: ${dropped.length} fetched PR(s) are missing from the report:`);
+    for (const pr of dropped) {
+      console.error(`    #${pr.number} ${pr.title} (${pr.url})`);
+    }
+  }
 }

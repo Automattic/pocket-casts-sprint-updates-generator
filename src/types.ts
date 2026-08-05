@@ -1,19 +1,4 @@
-export interface LinearIssue {
-  identifier: string;
-  title: string;
-  description: string;
-  status: string;
-  statusType: string;
-  projectName: string | null;
-  projectId: string | null;
-  projectUrl: string | null;
-  projectProgress: number | null;
-  projectState: string | null;
-  assigneeName: string | null;
-  completedAt: string | null;
-  prUrls: string[];
-  labels: string[];
-}
+export type ReportStatus = "In Progress" | "Complete" | "Paused";
 
 export interface GitHubPR {
   number: number;
@@ -23,36 +8,74 @@ export interface GitHubPR {
   closedAt: string;
   author: string;
   repository: string;
+  platform: string;
   labels: string[];
+  linearRefs: string[];
 }
 
-export interface ProjectGroup {
-  projectName: string;
-  projectUrl: string | null;
-  projectProgress: number | null;
-  projectState: string | null;
-  projectDescription: string | null;
-  projectTargetDate: string | null;
-  projectLatestUpdate: string | null;
-  projectHealth: string | null;
-  platform: string;
-  issues: LinearIssue[];
-  prs: GitHubPR[];
-}
-
-export interface ProjectSummary {
-  projectName: string;
-  projectUrl: string | null;
-  platform: string;
-  summary: string;
-  status: "Completed" | "In Progress" | "Paused";
-  items: ReportItem[];
-}
-
-export interface ReportItem {
+export interface LinearTicket {
+  identifier: string;
   title: string;
-  url: string | null;
-  linearId: string | null;
+  teamKey: string;
+  projectId: string | null;
+}
+
+export interface LinearProjectUpdate {
+  body: string;
+  health: string;
+  createdAt: string;
+}
+
+export interface LinearInitiative {
+  id: string;
+  name: string;
+  url: string;
+}
+
+export interface LinearProject {
+  id: string;
+  name: string;
+  url: string;
+  teamKeys: string[];
+  platform: string;
+  status: ReportStatus;
+  progress: number;
+  description: string | null;
+  targetDate: string | null;
+  initiative: LinearInitiative | null;
+  latestUpdate: LinearProjectUpdate | null;
+}
+
+export interface ProjectBundle {
+  project: LinearProject;
+  prs: GitHubPR[];
+  tickets: LinearTicket[];
+}
+
+export interface ReportPR {
+  title: string;
+  url: string;
+  number: number;
+}
+
+export interface ReportProject {
+  projectName: string;
+  projectUrl: string | null;
+  platform: string;
+  status: ReportStatus;
+  summary: string;
+  prs: ReportPR[];
+}
+
+export interface ReportInitiative {
+  initiativeName: string | null;
+  initiativeUrl: string | null;
+  projects: ReportProject[];
+}
+
+export interface OtherItem {
+  title: string;
+  url: string;
 }
 
 export interface TopItem {
@@ -64,17 +87,12 @@ export interface SprintReport {
   startDate: string;
   endDate: string;
   topItems: TopItem[];
-  projectUpdates: ProjectSummary[];
-  otherByPlatform: Record<string, ReportItem[]>;
-}
-
-export interface RepoConfig {
-  name: string;
-  platform: string;
+  initiatives: ReportInitiative[];
+  otherByPlatform: Record<string, OtherItem[]>;
 }
 
 export interface MemberConfig {
-  linearEmail: string;
+  linear: string;
   name: string;
 }
 
@@ -84,31 +102,31 @@ export interface AIConfig {
 }
 
 export interface SprintCadence {
-  anchorDate: string;   // A known sprint start date (YYYY-MM-DD, should be a Sunday)
-  durationWeeks: number; // Sprint length in weeks (default: 2)
+  anchorDate: string;
+  durationWeeks: number;
 }
 
 export interface PromptConfig {
-  projectSummary?: string;        // Full override for the project summary prompt
-  topItems?: string;              // Full override for the top items prompt
-  additionalInstructions?: string; // Appended to all AI prompts
+  projectSummary?: string;
+  topItems?: string;
+  orphanPairing?: string;
+  additionalInstructions?: string;
 }
 
 export interface SprintConfig {
   githubOrg: string;
-  repos: RepoConfig[];
-  linearTeamKeys: string[];
+  repoPrefix: string;
+  teamKeyPlatformMap: Record<string, string>;
   members: Record<string, MemberConfig>;
   defaultAuthor: string;
   ai: AIConfig;
   sprint: SprintCadence;
-  repoPlatformMap: Record<string, string>;
   prompts?: PromptConfig;
+  repoPlatformMap: Record<string, string>;
 }
 
 export interface ResolvedAuthors {
   githubAuthors: string[];
-  linearEmails: string[];
 }
 
 export interface HistoryEntry {
@@ -119,9 +137,4 @@ export interface HistoryEntry {
   projectCount: number;
   prCount: number;
   issueCount: number;
-}
-
-export interface CorrelatorResult {
-  projectGroups: ProjectGroup[];
-  unmatchedPRs: GitHubPR[];
 }
